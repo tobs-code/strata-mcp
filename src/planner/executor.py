@@ -125,9 +125,9 @@ class PlanExecutor:
         try:
             escaped_query = query.replace("'", "\\'")
             if not escaped_query.strip():
-                sql = "SELECT * FROM event WHERE (forgotten IS NULL OR forgotten = false) ORDER BY timestamp DESC LIMIT 10;"
+                sql = "SELECT * FROM event WHERE (forgotten IS NONE OR forgotten = false) ORDER BY timestamp DESC LIMIT 10;"
             else:
-                sql = f"SELECT * FROM event WHERE (content @@ '{escaped_query}' OR content CONTAINS '{escaped_query}') AND (forgotten IS NULL OR forgotten = false) ORDER BY timestamp DESC LIMIT 10;"
+                sql = f"SELECT * FROM event WHERE (content @@ '{escaped_query}' OR content CONTAINS '{escaped_query}') AND (forgotten IS NONE OR forgotten = false) ORDER BY timestamp DESC LIMIT 10;"
             raw = self._query_surreal(sql)
             if isinstance(raw, dict):
                 inner = raw.get('result', [])
@@ -143,7 +143,7 @@ class PlanExecutor:
         try:
             escaped_query = query.replace("'", "\\'")
             # 1. Try to find entities matching the query
-            sql = f"SELECT * FROM entity WHERE (name @@ '{escaped_query}' OR name CONTAINS '{escaped_query}' OR '{escaped_query}' CONTAINS name) AND (forgotten IS NULL OR forgotten = false) LIMIT 10;"
+            sql = f"SELECT * FROM entity WHERE (name @@ '{escaped_query}' OR name CONTAINS '{escaped_query}' OR '{escaped_query}' CONTAINS name) AND (forgotten IS NONE OR forgotten = false) LIMIT 10;"
             raw = self._query_surreal(sql)
             entities = []
             if isinstance(raw, dict):
@@ -157,7 +157,7 @@ class PlanExecutor:
                 entity_ids = [e['id'] for e in entities if 'id' in e]
                 if entity_ids:
                     ids_str = ", ".join([f"{eid}" for eid in entity_ids])
-                    facts_sql = f"SELECT * FROM fact WHERE (in IN [{ids_str}] OR out IN [{ids_str}]) AND (valid_until IS NULL OR valid_until > time::now()) AND (forgotten IS NULL OR forgotten = false) LIMIT 20 FETCH in, out;"
+                    facts_sql = f"SELECT * FROM fact WHERE (in IN [{ids_str}] OR out IN [{ids_str}]) AND (valid_until IS NONE OR valid_until > time::now()) AND (forgotten IS NONE OR forgotten = false) LIMIT 20 FETCH in, out;"
                     facts_raw = self._query_surreal(facts_sql)
                     if isinstance(facts_raw, dict):
                         facts = facts_raw.get('result', [])
@@ -184,11 +184,11 @@ class PlanExecutor:
         try:
             escaped_query = query.replace("'", "\\'")
             if not escaped_query.strip():
-                events_sql = "SELECT * FROM event WHERE (forgotten IS NULL OR forgotten = false) ORDER BY timestamp DESC LIMIT 5;"
-                entities_sql = "SELECT * FROM entity WHERE (forgotten IS NULL OR forgotten = false) LIMIT 5;"
+                events_sql = "SELECT * FROM event WHERE (forgotten IS NONE OR forgotten = false) ORDER BY timestamp DESC LIMIT 5;"
+                entities_sql = "SELECT * FROM entity WHERE (forgotten IS NONE OR forgotten = false) LIMIT 5;"
             else:
-                events_sql = f"SELECT * FROM event WHERE (content @@ '{escaped_query}' OR content CONTAINS '{escaped_query}') AND (forgotten IS NULL OR forgotten = false) ORDER BY timestamp DESC LIMIT 5;"
-                entities_sql = f"SELECT * FROM entity WHERE (name @@ '{escaped_query}' OR name CONTAINS '{escaped_query}') AND (forgotten IS NULL OR forgotten = false) LIMIT 5;"
+                events_sql = f"SELECT * FROM event WHERE (content @@ '{escaped_query}' OR content CONTAINS '{escaped_query}') AND (forgotten IS NONE OR forgotten = false) ORDER BY timestamp DESC LIMIT 5;"
+                entities_sql = f"SELECT * FROM entity WHERE (name @@ '{escaped_query}' OR name CONTAINS '{escaped_query}') AND (forgotten IS NONE OR forgotten = false) LIMIT 5;"
             
             events_result = self._query_surreal(events_sql)
             entities_result = self._query_surreal(entities_sql)
@@ -206,9 +206,9 @@ class PlanExecutor:
         try:
             escaped_query = query.replace("'", "\\'")
             if not escaped_query.strip():
-                sql = "SELECT * FROM event WHERE (forgotten IS NULL OR forgotten = false) ORDER BY timestamp DESC LIMIT 10;"
+                sql = "SELECT * FROM event WHERE (forgotten IS NONE OR forgotten = false) ORDER BY timestamp DESC LIMIT 10;"
             else:
-                sql = f"SELECT * FROM event WHERE (content @@ '{escaped_query}' OR content CONTAINS '{escaped_query}') AND (forgotten IS NULL OR forgotten = false) ORDER BY timestamp DESC LIMIT 10;"
+                sql = f"SELECT * FROM event WHERE (content @@ '{escaped_query}' OR content CONTAINS '{escaped_query}') AND (forgotten IS NONE OR forgotten = false) ORDER BY timestamp DESC LIMIT 10;"
             raw = self._query_surreal(sql)
             if isinstance(raw, dict):
                 inner = raw.get('result', [])
@@ -223,7 +223,7 @@ class PlanExecutor:
         """Execute knowledge graph with invalidation strategy"""
         try:
             escaped_query = query.replace("'", "\\'")
-            sql = f"SELECT * FROM entity WHERE (name @@ '{escaped_query}' OR name CONTAINS '{escaped_query}') AND (valid_until IS NULL OR valid_until > time::now()) AND (forgotten IS NULL OR forgotten = false) LIMIT 10;"
+            sql = f"SELECT * FROM entity WHERE (name @@ '{escaped_query}' OR name CONTAINS '{escaped_query}') AND (valid_until IS NONE OR valid_until > time::now()) AND (forgotten IS NONE OR forgotten = false) LIMIT 10;"
             raw = self._query_surreal(sql)
             if isinstance(raw, dict):
                 inner = raw.get('result', [])
@@ -370,10 +370,10 @@ class PlanExecutor:
         try:
             escaped_query = query.replace("'", "\\'")
             if not escaped_query.strip():
-                sql = "SELECT *, search::score(1.0) AS relevance_score FROM event WHERE (forgotten IS NULL OR forgotten = false) ORDER BY timestamp DESC LIMIT 10;"
+                sql = "SELECT *, search::score(1.0) AS relevance_score FROM event WHERE (forgotten IS NONE OR forgotten = false) ORDER BY timestamp DESC LIMIT 10;"
             else:
                 # Try full-text search first, fallback to CONTAINS if it fails or returns nothing
-                sql = f"SELECT *, search::score(1.0) AS relevance_score FROM event WHERE content @@ '{escaped_query}' AND (forgotten IS NULL OR forgotten = false) ORDER BY relevance_score DESC LIMIT 10;"
+                sql = f"SELECT *, search::score(1.0) AS relevance_score FROM event WHERE content @@ '{escaped_query}' AND (forgotten IS NONE OR forgotten = false) ORDER BY relevance_score DESC LIMIT 10;"
             result = self._query_surreal(sql)
             
             items = []
@@ -382,7 +382,7 @@ class PlanExecutor:
             
             if not items:
                 # Fallback to simple CONTAINS search
-                sql = f"SELECT * FROM event WHERE content CONTAINS '{escaped_query}' AND (forgotten IS NULL OR forgotten = false) LIMIT 10;"
+                sql = f"SELECT * FROM event WHERE content CONTAINS '{escaped_query}' AND (forgotten IS NONE OR forgotten = false) LIMIT 10;"
                 result = self._query_surreal(sql)
                 if isinstance(result, dict) and 'result' in result:
                     items = result['result']
@@ -407,7 +407,7 @@ class PlanExecutor:
             SELECT id, content, vector::similarity::cosine(embedding, {query_vector_str}) AS similarity_score 
             FROM event 
             WHERE embedding IS NOT NONE 
-              AND (forgotten IS NULL OR forgotten = false)
+              AND (forgotten IS NONE OR forgotten = false)
               AND array::len(embedding) = {len(query_vector)}
             ORDER BY similarity_score DESC 
             LIMIT 10;
@@ -429,9 +429,9 @@ class PlanExecutor:
             # We want recent events, regardless of content match if query is temporal? 
             # Actually, usually we still want some relevance.
             if not escaped_query.strip():
-                sql = "SELECT *, (time::now() - timestamp) AS time_diff_duration FROM event WHERE (forgotten IS NULL OR forgotten = false) ORDER BY timestamp DESC LIMIT 10;"
+                sql = "SELECT *, (time::now() - timestamp) AS time_diff_duration FROM event WHERE (forgotten IS NONE OR forgotten = false) ORDER BY timestamp DESC LIMIT 10;"
             else:
-                sql = f"SELECT *, (time::now() - timestamp) AS time_diff_duration FROM event WHERE (content @@ '{escaped_query}' OR content CONTAINS '{escaped_query}') AND (forgotten IS NULL OR forgotten = false) ORDER BY timestamp DESC LIMIT 10;"
+                sql = f"SELECT *, (time::now() - timestamp) AS time_diff_duration FROM event WHERE (content @@ '{escaped_query}' OR content CONTAINS '{escaped_query}') AND (forgotten IS NONE OR forgotten = false) ORDER BY timestamp DESC LIMIT 10;"
             result = self._query_surreal(sql)
             
             if isinstance(result, dict) and 'result' in result:

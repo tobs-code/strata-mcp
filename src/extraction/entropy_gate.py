@@ -53,6 +53,7 @@ class EntropyGate:
     def _query_surreal(self, sql: str) -> List[Dict]:
         headers = {
             "Accept": "application/json",
+            "Content-Type": "text/plain",
         }
         full_sql = f"USE NS {self.surreal_ns} DB {self.surreal_db};\n{sql}"
         response = requests.post(self.surreal_url, data=full_sql, headers=headers, auth=self.auth, timeout=30)
@@ -114,7 +115,7 @@ class EntropyGate:
         FROM event
         WHERE embedding IS NOT NONE 
           AND array::len(embedding) = {len(embedding)}
-          AND (forgotten IS NULL OR forgotten = false)
+          AND (forgotten IS NONE OR forgotten = false)
         ORDER BY similarity DESC
         LIMIT 5;
         """
@@ -186,35 +187,164 @@ class EntropyGate:
     def _log_decision(self, text: str, entropy: float, novelty: float, composite_score: float, decision: str):
         """Log the entropy gate decision to database"""
         try:
-            text_escaped = text.replace("'", "\\'")
+            content_hash = self._hash_content(text)
             sql = f"""
-            USE NS {self.surreal_ns} DB {self.surreal_db};
             CREATE gate_log SET 
-                text = '{text_escaped}',
-                entropy = {entropy},
+                content_hash = '{content_hash}',
+                text_score = {entropy},
                 novelty = {novelty},
-                composite_score = {composite_score},
-                threshold = {self.config.threshold},
-                decision = '{decision}',
-                reason = 'Entropy: {entropy:.3f}, Novelty: {novelty:.3f}, Composite: {composite_score:.3f}';
+                gate_score = {composite_score},
+                decision = '{decision}';
             """
-            self._query_surreal(sql)
+            result = self._query_surreal(sql)
+            if not result or len(result) < 2 or result[1].get("status") != "OK":
+                import sys
+                sys.stderr.write(f"[Gate] _log_decision failed: {result}\n")
         except Exception as e:
-            print(f"Warning: Could not log entropy gate decision: {e}")
+            import sys
+            sys.stderr.write(f"[Gate] _log_decision exception: {e}\n")
+
+    def _extract_candidate_entities(self, text: str) -> List[str]:
+        """
+        Extrahiert Kandidaten-Entities aus dem Text.
+        Sucht nach großgeschriebenen Wörtern/Phrasen (einfache NER-Heuristik).
+        """
+        import re
+        # Finde großgeschriebene Wörter (potentielle Eigennamen)
+        candidates = set()
+        
+        # Pattern: Aufeinanderfolgende großgeschriebene Wörter (z.B. "SurrealDB", "Entropy Gate")
+        for match in re.finditer(r'\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)\b', text):
+            candidate = match.group(1).strip()
+            if len(candidate) >= 3:  # Mindestens 3 Zeichen
+                candidates.add(candidate)
+        
+        # Pattern: CamelCase-Wörter (z.B. "EntropyGate", "FastMCP")
+        for match in re.finditer(r'\b([A-Z][a-z]+[A-Z][a-zA-Z]*)\b', text):
+            candidate = match.group(1).strip()
+            if len(candidate) >= 3:
+                candidates.add(candidate)
+        
+        # Pattern: Abkürzungen (z.B. "ATP", "CRISPR", "DNA")
+        for match in re.finditer(r'\b([A-Z]{2,})\b', text):
+            candidate = match.group(1).strip()
+            if len(candidate) >= 2:
+                candidates.add(candidate)
+        
+        return list(candidates)
+
+    def _infer_entity_type(self, name: str) -> str:
+        """Bestimmt den Entity-Typ basierend auf dem Namen."""
+        lower = name.lower()
+        if any(suffix in lower for suffix in ['corp', 'inc', 'ltd', 'gmbh', 'company', 'org', 'ag']):
+            return 'organization'
+        if any(suffix in lower for suffix in ['gate', 'system', 'framework', 'engine', 'server']):
+            return 'technology'
+        if any(suffix in lower for suffix in ['theorie', 'effekt', 'mechanik', 'technologie']):
+            return 'concept'
+        return 'concept'
+
+    def _ensure_entity(self, name: str) -> Optional[str]:
+        """Legt eine Entity an, falls sie noch nicht existiert. Gibt die ID zurück."""
+        name_escaped = name.replace("'", "\\'")
+        entity_type = self._infer_entity_type(name)
+        
+        # Prüfen ob Entity bereits existiert
+        check_sql = f"SELECT id FROM entity WHERE name = '{name_escaped}' LIMIT 1;"
+        check_result = self._query_surreal(check_sql)
+        if check_result and len(check_result) > 1:
+            existing = check_result[1].get("result", [])
+            if existing and len(existing) > 0:
+                return existing[0].get("id")
+        
+        # Neue Entity anlegen
+        create_sql = f"""
+        CREATE entity SET 
+            name = '{name_escaped}',
+            type = '{entity_type}';
+        """
+        result = self._query_surreal(create_sql)
+        if result and len(result) > 1:
+            entity_result = result[1].get("result", [])
+            if entity_result and len(entity_result) > 0:
+                return entity_result[0].get("id")
+        return None
+
+    def _extract_to_kg(self, text: str, event_id: str, debug: bool = False):
+        """
+        Extrahiert Entities und Facts aus dem Text in den Knowledge Graph.
+        """
+        candidates = self._extract_candidate_entities(text)
+        if not candidates:
+            if debug:
+                print(f"  [KG] No candidate entities found in text")
+            return {"entities_created": 0, "facts_created": 0}
+        
+        if debug:
+            print(f"  [KG] Found candidate entities: {candidates}")
+        
+        entities_created = 0
+        facts_created = 0
+        entity_ids = []
+        
+        # Entities anlegen
+        for name in candidates:
+            eid = self._ensure_entity(name)
+            if eid:
+                entity_ids.append(eid)
+                entities_created += 1
+                if debug:
+                    print(f"  [KG] Entity: {name} -> {eid}")
+        
+        # Facts zwischen Entities und Event anlegen (co-occurrence)
+        if len(entity_ids) >= 2:
+            for i in range(len(entity_ids)):
+                for j in range(i + 1, len(entity_ids)):
+                    try:
+                        relate_sql = f"""
+                        RELATE {entity_ids[i]}->fact->{entity_ids[j]} 
+                        SET predicate = 'co_occurs_with',
+                            source_event = {event_id},
+                            confidence = 0.5;
+                        """
+                        relate_result = self._query_surreal(relate_sql)
+                        if relate_result and len(relate_result) > 1 and relate_result[1].get("status") == "OK":
+                            facts_created += 1
+                    except Exception as e:
+                        if debug:
+                            print(f"  [KG] Error creating fact: {e}")
+        
+        # Fact: Event -> mentioned_in -> Entity (für jede Entity)
+        for eid in entity_ids:
+            try:
+                # Verwende das Event als Subject und Entity als Object
+                # SurrealDB: event->fact->entity mit predicate 'mentions'
+                relate_sql = f"""
+                RELATE {event_id}->fact->{eid} 
+                SET predicate = 'mentions',
+                    confidence = 0.8;
+                """
+                relate_result = self._query_surreal(relate_sql)
+                if relate_result and len(relate_result) > 1 and relate_result[1].get("status") == "OK":
+                    facts_created += 1
+            except Exception as e:
+                if debug:
+                    print(f"  [KG] Error creating mention fact: {e}")
+        
+        return {"entities_created": entities_created, "facts_created": facts_created}
 
     def ingest(self, text: str, source: str = "unknown", debug: bool = False) -> Optional[str]:
         """
         Hauptfunktion: Ingest eines Textes in das Memory System
         1. IMMER in Raw Event Log speichern
         2. Entropy Gate entscheiden lassen ob KG-Extraction
-        3. Entscheidung loggen
+        3. Bei 'extract': Entities und Facts in den Knowledge Graph extrahieren
         """
         
         # 1. IMMER in Raw Event Log speichern (ohne Gate!)
         embedding = self.embedding_service.embed_for_storage(text)
         text_escaped = text.replace("'", "\\'")
         sql = f"""
-        USE NS {self.surreal_ns} DB {self.surreal_db};
         CREATE event SET 
             content = '{text_escaped}',
             source = '{source}',
@@ -222,8 +352,8 @@ class EntropyGate:
         """
         try:
             result = self._query_surreal(sql)
-            if result and len(result) > 0:
-                event_result = result[0].get("result", [])
+            if result and len(result) > 1:
+                event_result = result[1].get("result", [])
                 if event_result and isinstance(event_result, list) and len(event_result) > 0:
                     event_id = event_result[0].get("id")
                 else:
@@ -241,10 +371,9 @@ class EntropyGate:
             print(f"Entropy Gate Decision: {gate_result}")
         
         # 3. Falls extract: starte KG-Extraction
-        if gate_result["decision"] == "extract":
-            # This would trigger the extraction process to KG
-            # For now we just log that extraction would happen
+        if gate_result["decision"] == "extract" and event_id:
+            kg_result = self._extract_to_kg(text, event_id, debug)
             if debug:
-                print(f"Would extract to Knowledge Graph: {text[:50]}...")
+                print(f"  [KG] Extraction complete: {kg_result}")
         
         return event_id

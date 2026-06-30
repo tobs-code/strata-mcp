@@ -128,3 +128,33 @@ impl BudgetTracker {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_health_factor_scaling() {
+        // Reset to healthy
+        update_system_health(1.0);
+        let mut tracker = BudgetTracker::new(CostBudget::Medium);
+        
+        // Base limit for Medium is 25 db_calls
+        tracker.record_db_call(25);
+        assert!(!tracker.is_over_budget(), "Should not be over budget at 25 calls with health 1.0");
+        
+        tracker.record_db_call(1);
+        assert!(tracker.is_over_budget(), "Should be over budget at 26 calls with health 1.0");
+
+        // Scale health down to 0.5
+        update_system_health(0.5);
+        let mut degraded_tracker = BudgetTracker::new(CostBudget::Medium);
+        
+        // Scaled limit for Medium should now be 12 (25 * 0.5)
+        degraded_tracker.record_db_call(12);
+        assert!(!degraded_tracker.is_over_budget(), "Should not be over budget at 12 calls with health 0.5");
+        
+        degraded_tracker.record_db_call(1);
+        assert!(degraded_tracker.is_over_budget(), "Should be over budget at 13 calls with health 0.5");
+    }
+}

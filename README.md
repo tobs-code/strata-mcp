@@ -139,10 +139,6 @@ python scripts/test_router_comprehensive.py
 python benchmarks/mcp_performance.py
 ```
 
-Current status: **Verified Robust**
-- **82+ passing tests** (inkl. neuer Router- & Logic-Validierung)
-- **Zero-Error Policy:** Alle MCP-Tools laufen stabil unter Last.
-
 ---
 
 ## Entropy Gating — How It Works

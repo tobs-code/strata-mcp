@@ -3,8 +3,8 @@
 Control Plane Server implementing the Model Context Protocol (MCP)
 Coordinates all components of the agent memory system
 
-NOTE: This implements the Model Context Protocol (MCP) specification from Anthropic,
-not to be confused with any other MCP acronym. This server serves as the system coordinator.
+NOTE: This implements the Model Context Protocol (MCP) specification from Anthropic.
+This server serves as the system coordinator.
 """
 import sys
 import os
@@ -591,36 +591,14 @@ async def memory_query_endpoint(request_data: dict):
 
 @mcp.tool()
 async def memory_store(content: str, source: str = "user_input", metadata: Optional[Dict[str, Any]] = None) -> dict:
-    """Stores a new event in the raw event log. Always persists, entropy gate decides KG extraction."""
-    embedding_service = get_embedding_service()
-    # Run heavy sync embedding in a thread to avoid blocking the event loop
-    embedding_list = await asyncio.to_thread(embedding_service.embed_for_storage, content)
-    content_escaped = content.replace("'", "\\'")
-    source_escaped = source.replace("'", "\\'")
-    embedding_storage = "[" + ", ".join(str(v) for v in embedding_list) + "]"
-
-    if metadata:
-        meta_json = json.dumps(metadata)
-        sql = (
-            f"CREATE event SET content = '{content_escaped}', "
-            f"source = '{source_escaped}', embedding = {embedding_storage}, "
-            f"metadata = {meta_json};"
-        )
-    else:
-        sql = (
-            f"CREATE event SET content = '{content_escaped}', "
-            f"source = '{source_escaped}', embedding = {embedding_storage};"
-        )
-
-    result = await _query_surreal(sql)
-    event_result = _extract_result(result)
-    if event_result and isinstance(event_result, list) and len(event_result) > 0 and isinstance(event_result[0], dict):
-        event_id = event_result[0]["id"]
-    elif event_result and isinstance(event_result, dict):
-        event_id = event_result.get("id")
-    else:
-        event_id = None
-    return {"event_id": event_id, "status": "stored", "source": source}
+    """Stores a new event in the raw event log. Runs through entropy gate which logs decisions to gate_log for later calibration."""
+    from src.extraction.entropy_gate import EntropyGate
+    gate = EntropyGate()
+    
+    # ingest() schreibt ins Event-Log, evaluiert Entropy, loggt in gate_log
+    event_id = await asyncio.to_thread(gate.ingest, content, source, True)
+    
+    return {"event_id": event_id, "status": "stored", "source": source, "gate": "active"}
 
 @mcp.tool()
 async def memory_query(query: str, cost_budget: str = "auto") -> dict:
@@ -741,32 +719,22 @@ async def memory_update(subject: str, predicate: str, new_value: str) -> dict:
         invalidate_sql = f"UPDATE {old_fact_id} SET valid_until = time::now();"
         await _query_surreal(invalidate_sql)
         invalidated = old_fact_id
-
-    subject_escaped = subject.replace("'", "\\'")
-    new_value_escaped = new_value.replace("'", "\\'")
-    predicate_escaped = predicate.replace("'", "\\'")
+    else:
+        return {"status": "error", "message": f"No existing fact found for subject='{subject}', predicate='{predicate}'"}
 
     subject_sql = f"SELECT id FROM entity WHERE name = '{subject_escaped}' LIMIT 1;"
     subject_result = await _query_surreal(subject_sql)
     subject_entities = _extract_result(subject_result, 1)
 
     if not subject_entities:
-        # Auto-create subject entity if it doesn't exist
-        subject_type = _infer_entity_type(subject)
-        create_subject_sql = f"CREATE entity SET name = '{subject_escaped}', type = '{subject_type}';"
-        create_subject_result = await _query_surreal(create_subject_sql)
-        subject_entities = _extract_result(create_subject_result, 1)
+        return {"status": "error", "message": f"Subject entity '{subject}' does not exist"}
 
     object_sql = f"SELECT id FROM entity WHERE name = '{new_value_escaped}' LIMIT 1;"
     object_result = await _query_surreal(object_sql)
     object_entities = _extract_result(object_result, 1)
 
     if not object_entities:
-        # Auto-create object entity if it doesn't exist
-        object_type = _infer_entity_type(new_value)
-        create_object_sql = f"CREATE entity SET name = '{new_value_escaped}', type = '{object_type}';"
-        create_object_result = await _query_surreal(create_object_sql)
-        object_entities = _extract_result(create_object_result, 1)
+        return {"status": "error", "message": f"Object entity '{new_value}' does not exist"}
 
     new_fact_id = None
     if subject_entities and object_entities:
@@ -856,7 +824,7 @@ async def event_log_search(query: str, since: Optional[str] = None, until: Optio
     """Direct timeline query without router: search raw event log."""
     query_escaped = query.replace("'", "\\'")
     # Hybrid search: Try full-text index (@@), fallback to CONTAINS
-    sql = f"SELECT * FROM event WHERE (content @@ '{query_escaped}' OR content CONTAINS '{query_escaped}') AND (forgotten IS NULL OR forgotten = false)"
+    sql = f"SELECT * FROM event WHERE (content @@ '{query_escaped}' OR content CONTAINS '{query_escaped}') AND (forgotten IS NONE OR forgotten = false)"
 
     if since:
         since_escaped = since.replace("'", "\\'")
@@ -930,7 +898,7 @@ async def semantic_search(query: str, top_k: int = 5) -> dict:
     SELECT id, content, vector::similarity::cosine(embedding, {query_vector_str}) AS score
     FROM event
     WHERE embedding IS NOT NONE 
-      AND (forgotten IS NULL OR forgotten = false)
+      AND (forgotten IS NONE OR forgotten = false)
       AND array::len(embedding) = {len(query_vector)}
     ORDER BY score DESC
     LIMIT {top_k};
@@ -966,7 +934,7 @@ async def semantic_search_endpoint(request_data: dict):
     SELECT id, content, vector::similarity::cosine(embedding, {query_vector_str}) AS score
     FROM event
     WHERE embedding IS NOT NONE 
-      AND (forgotten IS NULL OR forgotten = false)
+      AND (forgotten IS NONE OR forgotten = false)
       AND array::len(embedding) = {len(query_vector)}
     ORDER BY score DESC
     LIMIT {top_k};
@@ -983,20 +951,15 @@ async def semantic_search_endpoint(request_data: dict):
 @mcp.tool()
 async def memory_stats() -> dict:
     """Returns statistics about the memory system."""
-    # Multi-statement query to get all counts and times
-    # Added forgotten check to exclude soft-deleted items
-    sql = """
-    SELECT count() AS count FROM event WHERE (forgotten IS NULL OR forgotten = false) GROUP ALL;
-    SELECT count() AS count FROM entity WHERE (forgotten IS NULL OR forgotten = false) GROUP ALL;
-    SELECT count() AS count FROM fact WHERE (valid_until = NONE OR valid_until = NULL) AND (forgotten IS NULL OR forgotten = false) GROUP ALL;
-    SELECT timestamp FROM event WHERE (forgotten IS NULL OR forgotten = false) ORDER BY timestamp ASC LIMIT 1;
-    SELECT timestamp FROM event WHERE (forgotten IS NULL OR forgotten = false) ORDER BY timestamp DESC LIMIT 1;
-    SELECT count() AS count FROM gate_log GROUP ALL;
-    SELECT count() AS count FROM gate_log WHERE decision = 'extract' GROUP ALL;
-    """
-    
-    result_raw = await _query_surreal(sql)
-    
+    # Use separate queries instead of multi-statement to avoid indexing issues
+    event_sql = "SELECT count() AS count FROM event WHERE (forgotten = false OR forgotten IS NONE) GROUP ALL;"
+    entity_sql = "SELECT count() AS count FROM entity WHERE (forgotten = false OR forgotten IS NONE) GROUP ALL;"
+    fact_sql = "SELECT count() AS count FROM fact WHERE (valid_until IS NONE OR valid_until = NONE) AND (forgotten = false OR forgotten IS NONE) GROUP ALL;"
+    oldest_sql = "SELECT timestamp FROM event WHERE (forgotten = false OR forgotten IS NONE) ORDER BY timestamp ASC LIMIT 1;"
+    newest_sql = "SELECT timestamp FROM event WHERE (forgotten = false OR forgotten IS NONE) ORDER BY timestamp DESC LIMIT 1;"
+    gate_total_sql = "SELECT count() AS count FROM gate_log GROUP ALL;"
+    gate_extracted_sql = "SELECT count() AS count FROM gate_log WHERE decision = 'extract' GROUP ALL;"
+
     stats = {
         "event_count": 0,
         "entity_count": 0,
@@ -1005,40 +968,50 @@ async def memory_stats() -> dict:
         "newest_event": None,
         "gate_pass_rate": 0.0
     }
-    
-    if not isinstance(result_raw, list):
-        return stats
-        
-    # Extract all results that have status "OK" and aren't the initial USE statement
-    data_results = []
-    for item in result_raw:
-        if isinstance(item, dict) and item.get("status") == "OK" and "result" in item:
-            res = item["result"]
-            # Skip the DB/NS info message result
-            if isinstance(res, dict) and "database" in res:
-                continue
-            data_results.append(res)
-            
-    # Map results in order: event, entity, fact, oldest, newest, gate_total, gate_extracted
-    if len(data_results) >= 1 and data_results[0] and isinstance(data_results[0], list):
-        stats["event_count"] = data_results[0][0].get("count", 0)
-    if len(data_results) >= 2 and data_results[1] and isinstance(data_results[1], list):
-        stats["entity_count"] = data_results[1][0].get("count", 0)
-    if len(data_results) >= 3 and data_results[2] and isinstance(data_results[2], list):
-        stats["fact_count"] = data_results[2][0].get("count", 0)
-    if len(data_results) >= 4 and data_results[3] and isinstance(data_results[3], list):
-        stats["oldest_event"] = data_results[3][0].get("timestamp")
-    if len(data_results) >= 5 and data_results[4] and isinstance(data_results[4], list):
-        stats["newest_event"] = data_results[4][0].get("timestamp")
-        
-    gate_total = 0
-    gate_extracted = 0
-    if len(data_results) >= 6 and data_results[5] and isinstance(data_results[5], list):
-        gate_total = data_results[5][0].get("count", 0)
-    if len(data_results) >= 7 and data_results[6] and isinstance(data_results[6], list):
-        gate_extracted = data_results[6][0].get("count", 0)
-        
-    stats["gate_pass_rate"] = round(gate_extracted / gate_total, 3) if gate_total > 0 else 0.0
+
+    try:
+        event_result = _extract_result(await _query_surreal(event_sql), 1)
+        if event_result and isinstance(event_result, list):
+            stats["event_count"] = event_result[0].get("count", 0)
+    except Exception as e:
+        print(f"[WARN] memory_stats event count failed: {e}")
+
+    try:
+        entity_result = _extract_result(await _query_surreal(entity_sql), 1)
+        if entity_result and isinstance(entity_result, list):
+            stats["entity_count"] = entity_result[0].get("count", 0)
+    except Exception as e:
+        print(f"[WARN] memory_stats entity count failed: {e}")
+
+    try:
+        fact_result = _extract_result(await _query_surreal(fact_sql), 1)
+        if fact_result and isinstance(fact_result, list):
+            stats["fact_count"] = fact_result[0].get("count", 0)
+    except Exception as e:
+        print(f"[WARN] memory_stats fact count failed: {e}")
+
+    try:
+        oldest_result = _extract_result(await _query_surreal(oldest_sql), 1)
+        if oldest_result and isinstance(oldest_result, list):
+            stats["oldest_event"] = oldest_result[0].get("timestamp")
+    except Exception:
+        pass
+
+    try:
+        newest_result = _extract_result(await _query_surreal(newest_sql), 1)
+        if newest_result and isinstance(newest_result, list):
+            stats["newest_event"] = newest_result[0].get("timestamp")
+    except Exception:
+        pass
+
+    try:
+        gate_total_result = _extract_result(await _query_surreal(gate_total_sql), 1)
+        gate_extracted_result = _extract_result(await _query_surreal(gate_extracted_sql), 1)
+        gate_total = gate_total_result[0].get("count", 0) if gate_total_result and isinstance(gate_total_result, list) else 0
+        gate_extracted = gate_extracted_result[0].get("count", 0) if gate_extracted_result and isinstance(gate_extracted_result, list) else 0
+        stats["gate_pass_rate"] = round(gate_extracted / gate_total, 3) if gate_total > 0 else 0.0
+    except Exception:
+        pass
 
     return stats
 
@@ -1146,25 +1119,35 @@ async def explain_routing_endpoint(request_data: dict):
 async def memory_forget(event_id: Optional[str] = None, entity: Optional[str] = None, reason: str = "") -> dict:
     """Forgets a memory by event_id or entity."""
     if event_id:
-        sql = f"UPDATE {event_id} SET forgotten = true;"
+        event_escaped = event_id.replace("'", "\\'")
+        check_sql = f"SELECT id FROM {event_escaped} LIMIT 1;"
+        check_result = await _query_surreal(check_sql)
+        events = _extract_result(check_result, 1)
+        if not events:
+            return {"status": "error", "message": f"Event '{event_id}' not found"}
+        sql = f"UPDATE {event_escaped} SET forgotten = true;"
         if reason:
             reason_escaped = reason.replace("'", "\\'")
-            sql = f"UPDATE {event_id} SET forgotten = true, forget_reason = '{reason_escaped}';"
-        result = await _query_surreal(sql)
-        forgotten = _extract_result(result)
+            sql = f"UPDATE {event_escaped} SET forgotten = true, forget_reason = '{reason_escaped}';"
+        await _query_surreal(sql)
         return {"forgotten_id": event_id, "type": "event", "reason": reason}
     
     if entity:
         entity_escaped = entity.replace("'", "\\'")
-        # Find entity ID by name
-        find_sql = f"SELECT id FROM entity WHERE name CONTAINS '{entity_escaped}' LIMIT 1;"
-        find_result = await _query_surreal(find_sql)
-        entities = _extract_result(find_result)
-        
-        if not entities:
-            return {"status": "error", "message": f"Entity '{entity}' not found"}
-            
-        entity_id = entities[0]["id"]
+        if entity_escaped.startswith("entity:"):
+            check_sql = f"SELECT id FROM {entity_escaped} LIMIT 1;"
+            check_result = await _query_surreal(check_sql)
+            found = _extract_result(check_result, 1)
+            if not found:
+                return {"status": "error", "message": f"Entity '{entity}' not found"}
+            entity_id = entity_escaped
+        else:
+            find_sql = f"SELECT id FROM entity WHERE name CONTAINS '{entity_escaped}' LIMIT 1;"
+            find_result = await _query_surreal(find_sql)
+            entities = _extract_result(find_result, 1)
+            if not entities:
+                return {"status": "error", "message": f"Entity '{entity}' not found"}
+            entity_id = entities[0]["id"]
         sql = f"UPDATE {entity_id} SET forgotten = true;"
         if reason:
             reason_escaped = reason.replace("'", "\\'")
@@ -1176,8 +1159,8 @@ async def memory_forget(event_id: Optional[str] = None, entity: Optional[str] = 
 
 
 @mcp.tool()
-async def memory_consolidate(scope: str = "local", entity: Optional[str] = None) -> dict:
-    """Consolidates memory entries."""
+async def memory_consolidate(scope: str = "local", entity: Optional[str] = None, delete_stale: bool = False) -> dict:
+    """Consolidates memory entries. When delete_stale=True, physically removes stale facts from the database."""
     maintainer = ConservativeMaintainer(debounce_seconds=0)
 
     if scope == "entity" and entity:
@@ -1193,7 +1176,22 @@ async def memory_consolidate(scope: str = "local", entity: Optional[str] = None)
 
     if scope == "local":
         stale = await maintainer.get_stale_facts(max_age_seconds=86400)
-        return {"scope": scope, "stale_facts_found": len(stale), "status": "reviewed"}
+        deleted_count = 0
+        if delete_stale and stale:
+            for fact in stale:
+                fact_id = fact.get("id")
+                if fact_id:
+                    try:
+                        await _query_surreal(f"DELETE {fact_id};")
+                        deleted_count += 1
+                    except Exception as e:
+                        print(f"[WARN] Could not delete stale fact {fact_id}: {e}")
+        return {
+            "scope": scope,
+            "stale_facts_found": len(stale),
+            "deleted_count": deleted_count if delete_stale else None,
+            "status": "cleaned" if (delete_stale and deleted_count > 0) else "reviewed"
+        }
 
     return {"error": "Invalid scope. Use 'local' or 'entity' with entity name.", "scope": scope}
 

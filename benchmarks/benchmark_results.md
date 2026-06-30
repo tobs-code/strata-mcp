@@ -273,3 +273,86 @@ explain_routing      |       0.20 |       0.35 |      0
 ```
 
 ---
+
+## Benchmark Run: 2026-06-30 22:48:03
+
+### Summary
+
+| Tool | Avg (ms) | P95 (ms) | Min (ms) | Max (ms) | Errors |
+| :--- | :---: | :---: | :---: | :---: | :---: |
+| `memory_stats` | 5176.22 | 5211.56 | 5147.74 | 5211.56 | 0 |
+| `memory_store` | 777.24 | 823.54 | 751.76 | 823.54 | 0 |
+| `memory_query` | 408.88 | 431.88 | 389.47 | 431.88 | 0 |
+| `semantic_search` | 778.73 | 797.05 | 761.54 | 797.05 | 0 |
+| `event_log_search` | 757.38 | 783.20 | 742.97 | 783.20 | 0 |
+| `kg_query` | 742.65 | 756.70 | 727.85 | 756.70 | 0 |
+| `explain_routing` | 0.21 | 0.36 | 0.18 | 0.36 | 0 |
+
+### Full Execution Logs
+
+```text
+STRATA MCP Performance Benchmark - 2026-06-30 22:48:03
+============================================================
+System: Windows 10 (AMD64)
+Python: 3.11.9
+============================================================
+
+--- Benchmarking 'memory_stats' (10 iterations) ---
+[INFO] Starting background SurrealDB reconnect task
+  Avg: 5176.22ms
+  P95: 5211.56ms
+  Min/Max: 5147.74ms / 5211.56ms
+  Errors: 0
+
+--- Benchmarking 'memory_store' (10 iterations) ---
+[INFO] Initializing Embedding Service with model: sentence-transformers/all-MiniLM-L6-v2...
+[OK] Embedding Service initialized
+  Avg: 777.24ms
+  P95: 823.54ms
+  Min/Max: 751.76ms / 823.54ms
+  Errors: 0
+
+--- Benchmarking 'memory_query' (10 iterations) ---
+  Avg: 408.88ms
+  P95: 431.88ms
+  Min/Max: 389.47ms / 431.88ms
+  Errors: 0
+
+--- Benchmarking 'semantic_search' (10 iterations) ---
+  Avg: 778.73ms
+  P95: 797.05ms
+  Min/Max: 761.54ms / 797.05ms
+  Errors: 0
+
+--- Benchmarking 'event_log_search' (10 iterations) ---
+  Avg: 757.38ms
+  P95: 783.20ms
+  Min/Max: 742.97ms / 783.20ms
+  Errors: 0
+
+--- Benchmarking 'kg_query' (10 iterations) ---
+  Avg: 742.65ms
+  P95: 756.70ms
+  Min/Max: 727.85ms / 756.70ms
+  Errors: 0
+
+--- Benchmarking 'explain_routing' (10 iterations) ---
+  Avg: 0.21ms
+  P95: 0.36ms
+  Min/Max: 0.18ms / 0.36ms
+  Errors: 0
+
+============================================================
+Tool                 |   Avg (ms) |   P95 (ms) | Errors
+------------------------------------------------------------
+memory_stats         |    5176.22 |    5211.56 |      0
+memory_store         |     777.24 |     823.54 |      0
+memory_query         |     408.88 |     431.88 |      0
+semantic_search      |     778.73 |     797.05 |      0
+event_log_search     |     757.38 |     783.20 |      0
+kg_query             |     742.65 |     756.70 |      0
+explain_routing      |       0.21 |       0.36 |      0
+============================================================
+```
+
+---
