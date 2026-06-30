@@ -227,4 +227,4 @@ Budgets are now **measured and enforced** per execution.
 
 ## License
 
-This project is licensed under the terms specified in the repository.
+This project is licensed under the Apache License 2.0. See the [LICENSE](LICENSE) file for details.
