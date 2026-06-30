@@ -198,9 +198,8 @@ impl Executor {
     async fn expand_graph_relations(&self, query: &str) -> serde_json::Value {
         let escaped_query = query.replace("'", "''");
         // This would involve more complex queries to expand relations
-        // For now, we'll use a placeholder query
         let surql = format!(
-            "SELECT ->fact->entity FROM entity WHERE name @@ '{}' LIMIT 5",
+            "SELECT ->fact->entity FROM entity WHERE name @@ '{}' AND (forgotten IS NULL OR forgotten = false) LIMIT 5",
             escaped_query
         );
 
@@ -229,7 +228,7 @@ impl Executor {
     async fn select_from_event_log_with_embedding(&self, query: &str) -> serde_json::Value {
         let escaped_query = query.replace("'", "''");
         let surql = format!(
-            "SELECT * FROM event WHERE content @@ '{}' ORDER BY timestamp DESC LIMIT 10",
+            "SELECT * FROM event WHERE content @@ '{}' AND (forgotten IS NULL OR forgotten = false) AND array::len(embedding) = 384 ORDER BY timestamp DESC LIMIT 10",
             escaped_query
         );
 
@@ -256,11 +255,16 @@ impl Executor {
     }
 
     async fn similarity_search(&self, query: &str) -> serde_json::Value {
-        // Placeholder for vector similarity search
-        // Actual implementation would depend on SurrealDB's vector capabilities
+        // Placeholder for vector similarity search - implementation depends on SurrealDB 3+ native vector capabilities
         let escaped_query = query.replace("'", "''");
+        
+        // We simulate the native vector search if possible, or fallback to keyword + forgotten filter
         let surql = format!(
-            "SELECT * FROM event WHERE content @@ '{}' ORDER BY timestamp DESC LIMIT 5",
+            "SELECT *, vector::similarity::cosine(embedding, (SELECT embedding FROM event WHERE content @@ '{}' LIMIT 1).embedding) AS score 
+             FROM event 
+             WHERE (forgotten IS NULL OR forgotten = false) 
+               AND array::len(embedding) = 384 
+             ORDER BY score DESC LIMIT 5",
             escaped_query
         );
 

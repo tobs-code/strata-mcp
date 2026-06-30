@@ -1,5 +1,18 @@
 use serde::{Deserialize, Serialize};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::sync::atomic::{AtomicU32, Ordering};
+
+// Global health factor (0.1 - 1.0), scaled by 100 for atomic storage
+static HEALTH_FACTOR: AtomicU32 = AtomicU32::new(100);
+
+pub fn update_system_health(factor: f64) {
+    let scaled = (factor.max(0.1).min(1.0) * 100.0) as u32;
+    HEALTH_FACTOR.store(scaled, Ordering::Relaxed);
+}
+
+pub fn get_system_health() -> f64 {
+    HEALTH_FACTOR.load(Ordering::Relaxed) as f64 / 100.0
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct QueryClassification {
@@ -92,11 +105,15 @@ impl BudgetTracker {
     }
 
     pub fn is_over_budget(&self) -> bool {
-        let (max_db, max_tokens) = match self.budget {
+        let (base_db, base_tokens) = match self.budget {
             CostBudget::Low => (10, 1000),
             CostBudget::Medium => (25, 3000),
             CostBudget::High => (50, 8000),
         };
+        
+        let health = get_system_health();
+        let max_db = (base_db as f64 * health) as u32;
+        let max_tokens = (base_tokens as f64 * health) as u32;
         
         self.db_calls > max_db || self.estimated_tokens > max_tokens
     }

@@ -965,12 +965,13 @@ async def semantic_search_endpoint(request_data: dict):
 async def memory_stats() -> dict:
     """Returns statistics about the memory system."""
     # Multi-statement query to get all counts and times
+    # Added forgotten check to exclude soft-deleted items
     sql = """
-    SELECT count() AS count FROM event GROUP ALL;
-    SELECT count() AS count FROM entity GROUP ALL;
-    SELECT count() AS count FROM fact WHERE (valid_until = NONE OR valid_until = NULL) GROUP ALL;
-    SELECT timestamp FROM event ORDER BY timestamp ASC LIMIT 1;
-    SELECT timestamp FROM event ORDER BY timestamp DESC LIMIT 1;
+    SELECT count() AS count FROM event WHERE (forgotten IS NULL OR forgotten = false) GROUP ALL;
+    SELECT count() AS count FROM entity WHERE (forgotten IS NULL OR forgotten = false) GROUP ALL;
+    SELECT count() AS count FROM fact WHERE (valid_until = NONE OR valid_until = NULL) AND (forgotten IS NULL OR forgotten = false) GROUP ALL;
+    SELECT timestamp FROM event WHERE (forgotten IS NULL OR forgotten = false) ORDER BY timestamp ASC LIMIT 1;
+    SELECT timestamp FROM event WHERE (forgotten IS NULL OR forgotten = false) ORDER BY timestamp DESC LIMIT 1;
     SELECT count() AS count FROM gate_log GROUP ALL;
     SELECT count() AS count FROM gate_log WHERE decision = 'extract' GROUP ALL;
     """
