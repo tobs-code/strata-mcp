@@ -1170,7 +1170,7 @@ async def memory_consolidate(scope: str = "local", entity: Optional[str] = None)
     return {"error": "Invalid scope. Use 'local' or 'entity' with entity name.", "scope": scope}
 
 
-@mcp.on_startup()
+@app.on_event("startup")
 async def on_startup():
     """Start background tasks on server startup."""
     asyncio.create_task(_background_reconnect_task())
@@ -1182,6 +1182,10 @@ if __name__ == "__main__":
     
     # Pre-load embedding service to avoid hang on first tool call
     get_embedding_service()
+    
+    # Start background tasks manually since mcp.run() blocks and isn't the FastAPI app
+    loop = asyncio.get_event_loop()
+    loop.create_task(_background_reconnect_task())
     
     # Run FastMCP stdio server (for MCP clients)
     mcp.run()
