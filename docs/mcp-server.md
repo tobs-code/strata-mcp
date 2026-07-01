@@ -1,8 +1,8 @@
 # MCP Server — STRATA Memory Stack
 
-Der MCP-Server exponiert den gesamten STRATA Memory Stack als standardisierte Tool-Schnittstelle über das [Model Context Protocol (MCP)](https://modelcontextprotocol.io). Jeder MCP-kompatible Client (z.B. Claude Desktop, Cursor, VS Code mit MCP-Extension) kann die 10 Memory-Tools direkt aufrufen — ohne den Stack selbst hosten zu müssen.
+The MCP Server exposes the entire STRATA Memory Stack as a standardized tool interface via the [Model Context Protocol (MCP)](https://modelcontextprotocol.io). Any MCP-compatible client (e.g. Claude Desktop, Cursor, VS Code with MCP extension) can call all 10 memory tools directly — without hosting the stack itself.
 
-## Architektur-Überblick
+## Architecture Overview
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -30,16 +30,16 @@ Der MCP-Server exponiert den gesamten STRATA Memory Stack als standardisierte To
 └─────────────────────────────────────────────────────────────┘
 ```
 
-## Voraussetzungen
+## Prerequisites
 
-| Komponente | Version | Zweck |
-|------------|---------|-------|
+| Component | Version | Purpose |
+|-----------|---------|---------|
 | Python | 3.10+ | Runtime |
-| Docker + Docker Compose | aktuell | SurrealDB Container |
-| SurrealDB | latest | Speicher (Event Log, KG, Vektor-Index) |
-| CUDA-fähige GPU | optional | Embedding-Modell (`nomic-ai/nomic-embed-text-v1.5`) |
+| Docker + Docker Compose | latest | SurrealDB container |
+| SurrealDB | latest | Storage (Event Log, KG, Vector Index) |
+| CUDA-capable GPU | optional | Embedding model (`sentence-transformers/all-MiniLM-L6-v2`) |
 
-Python-Pakete (aus `requirements.txt`):
+Python packages (from `requirements.txt`):
 
 ```
 requests>=2.28.0
@@ -50,7 +50,7 @@ surrealdb>=1.0.0
 python-dotenv>=1.0.0
 ```
 
-Zusätzlich benötigt (muss separat installiert werden):
+Additional dependencies (must be installed separately):
 
 ```
 sentence-transformers>=2.2.0
@@ -65,48 +65,48 @@ pip install -r requirements.txt
 pip install sentence-transformers scikit-learn mcp[fastmcp]
 ```
 
-## Schnellstart
+## Quick Start
 
-### 1. SurrealDB starten
+### 1. Start SurrealDB
 
 ```bash
 cd sdb
 docker-compose up -d
 ```
 
-Prüfen, dass der Container läuft:
+Verify the container is running:
 
 ```bash
 docker ps --filter "name=strata-surrealdb"
 ```
 
-SurrealDB ist dann erreichbar unter `http://127.0.0.1:8000` mit Credentials `root` / `root`.
+SurrealDB is then reachable at `http://127.0.0.1:8000` with credentials `root` / `root`.
 
-### 2. Schema und Helper-Funktionen laden
+### 2. Load Schema and Helper Functions
 
 ```bash
 cd ..
 python scripts/load_schema_optimized.py
 ```
 
-Das Skript lädt nacheinander:
-- `docs/schema.surql` — Tabellen, Felder, Indizes, Fulltext-Analyzer, Vektor-Index
-- `docs/helper_functions.surql` — DB-seitige Funktionen (`fn::active_fact`, `fn::facts_at`, …)
-- `docs/test_data.surql` — Beispiel-Daten (Alice, Acme Corp, …)
+The script loads in order:
+- `docs/schema.surql` — tables, fields, indexes, fulltext analyzer, vector index
+- `docs/helper_functions.surql` — DB-side functions (`fn::active_fact`, `fn::facts_at`, …)
+- `docs/test_data.surql` — sample data (Alice, Acme Corp, …)
 
-**Wichtig:** Der Loader prependet automatisch `USE NS strata DB strata;` an jeden Batch und entfernt Inline-Kommentare, damit SurrealDB 3 die Statements korrekt ausführt.
+**Important:** The loader automatically prepends `USE NS strata DB strata;` to each batch and strips inline comments so SurrealDB 3 executes statements correctly.
 
-### 3. MCP Server starten
+### 3. Start MCP Server
 
-#### Als stdio-Server (für MCP-Clients)
+#### As stdio Server (for MCP clients)
 
 ```bash
 python -m src.mcp.server
 ```
 
-Der Server spricht MCP über stdin/stdout. Die meisten MCP-Clients starten den Server als Subprozess und kommunizieren per JSON-RPC darüber.
+The server speaks MCP over stdin/stdout. Most MCP clients start the server as a subprocess and communicate via JSON-RPC.
 
-#### Konfiguration in Claude Desktop (Beispiel)
+#### Configuration in Claude Desktop (Example)
 
 ```json
 {
@@ -123,9 +123,9 @@ Der Server spricht MCP über stdin/stdout. Die meisten MCP-Clients starten den S
 }
 ```
 
-#### Konfiguration in Cursor / VS Code
+#### Configuration in Cursor / VS Code
 
-In `.cursor/mcp.json` oder über die VS Code MCP-Extension:
+In `.cursor/mcp.json` or via the VS Code MCP extension:
 
 ```json
 {
@@ -140,23 +140,23 @@ In `.cursor/mcp.json` oder über die VS Code MCP-Extension:
 }
 ```
 
-## Die 10 Tools (4 Schichten)
+## The 10 Tools (4 Layers)
 
-### Schicht 1 — Core Memory Operations
+### Layer 1 — Core Memory Operations
 
-Die drei Tools, die ein STRATA im täglichen Betrieb 90 % der Zeit braucht.
+The three tools an STRATA needs 90% of the time in daily operation.
 
 #### `memory_store`
 
-Speichert ein Event im immutable Raw Event Log. Das Entropy-Gate entscheidet später, ob der Inhalt zusätzlich in den Knowledge Graph extrahiert wird.
+Stores an event in the immutable Raw Event Log. The Entropy Gate later decides whether the content is additionally extracted into the Knowledge Graph.
 
-| Parameter | Typ | Pflicht | Beschreibung |
-|-----------|-----|---------|-------------|
-| `content` | `string` | ja | Roher Inhalt |
-| `source` | `string` | nein | Quelle (Standard: `"user_input"`) |
-| `metadata` | `object` | nein | Zusätzliche Metadaten |
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `content` | `string` | yes | Raw content |
+| `source` | `string` | no | Source (default: `"user_input"`) |
+| `metadata` | `object` | no | Additional metadata |
 
-**Rückgabe:**
+**Returns:**
 
 ```json
 {
@@ -166,33 +166,33 @@ Speichert ein Event im immutable Raw Event Log. Das Entropy-Gate entscheidet sp�
 }
 ```
 
-**Beispiel:**
+**Example:**
 
 ```json
 {
-  "content": "Alice arbeitet bei Acme Corp in Berlin.",
+  "content": "Alice works at Acme Corp in Berlin.",
   "source": "user_input"
 }
 ```
 
-Das Embedding wird automatisch über `nomic-ai/nomic-embed-text-v1.5` (768 Dimensionen) erzeugt und als `vector(f32, 768)` in SurrealDB gespeichert.
+The embedding is automatically generated via `sentence-transformers/all-MiniLM-L6-v2` (384 dimensions) and stored as `vector(f32, 384)` in SurrealDB.
 
 ---
 
 #### `memory_query`
 
-Der High-Level-Einstieg. Klassifiziert die Query, wählt eine Retrieval-Strategie und gibt strukturierte Ergebnisse zurück.
+The high-level entry point. Classifies the query, selects a retrieval strategy, and returns structured results.
 
-| Parameter | Typ | Pflicht | Beschreibung |
-|-----------|-----|---------|-------------|
-| `query` | `string` | ja | Natürlichsprachige Query |
-| `cost_budget` | `string` | nein | `"auto"` (Standard), `"low"`, `"medium"`, `"high"` |
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `query` | `string` | yes | Natural language query |
+| `cost_budget` | `string` | no | `"auto"` (default), `"low"`, `"medium"`, `"high"` |
 
-**Rückgabe:**
+**Returns:**
 
 ```json
 {
-  "query": "Wo arbeitet Alice?",
+  "query": "Where does Alice work?",
   "classified_as": "factual",
   "confidence": 1.0,
   "strategy": "knowledge_graph_first",
@@ -206,26 +206,26 @@ Der High-Level-Einstieg. Klassifiziert die Query, wählt eine Retrieval-Strategi
 }
 ```
 
-**Mögliche Klassifizierungen:**
-- `temporal` — Zeitbezogene Query (wann, seit, bis)
-- `factual` — Faktenabfrage (wer, was, wo)
-- `multi-hop` — Mehrstufige Schlussfolgerung (und, warum, Beziehung)
-- `conversational` — Konversationsbezug (erinnerst du dich, haben wir gesprochen)
-- `update` — Aktualisierungsanweisung
+**Possible classifications:**
+- `temporal` — Time-related query (when, since, until)
+- `factual` — Fact query (who, what, where)
+- `multi-hop` — Multi-step reasoning (and, why, relationship)
+- `conversational` — Conversation context (remember, talked about)
+- `update` — Update instruction
 
 ---
 
 #### `memory_update`
 
-Aktualisiert einen Fact im Knowledge Graph durch logische Invalidation. Der alte Fact bekommt `valid_until` gesetzt, ein neuer Fact wird angelegt. Der Raw Event Log bleibt immutable.
+Updates a fact in the Knowledge Graph through logical invalidation. The old fact gets `valid_until` set, a new fact is created. The Raw Event Log remains immutable.
 
-| Parameter | Typ | Pflicht | Beschreibung |
-|-----------|-----|---------|-------------|
-| `subject` | `string` | ja | Subjekt-Entität |
-| `predicate` | `string` | ja | Prädikat (z.B. `"works_at"`) |
-| `new_value` | `string` | ja | Neuer Objekt-Wert |
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `subject` | `string` | yes | Subject entity |
+| `predicate` | `string` | yes | Predicate (e.g. `"works_at"`) |
+| `new_value` | `string` | yes | New object value |
 
-**Rückgabe:**
+**Returns:**
 
 ```json
 {
@@ -237,33 +237,33 @@ Aktualisiert einen Fact im Knowledge Graph durch logische Invalidation. Der alte
 }
 ```
 
-**Hinweis:** Subjekt und Objekt müssen bereits als Entitäten existieren. Eine automatische Entity-Erstellung findet nicht statt.
+**Note:** Subject and object must already exist as entities. Automatic entity creation is not performed.
 
 ---
 
-### Schicht 2 — Retrieval Primitives
+### Layer 2 — Retrieval Primitives
 
-Für STRATAs, die mehr Kontrolle über den Retrieval-Prozess brauchen und den Router umgehen wollen.
+For STRATAs that need more control over the retrieval process and want to bypass the router.
 
 #### `event_log_search`
 
-Hybride Suche im Event Log (BM25 über FTX-Index + Vector über HNSW + RRF-Fusion) ohne Router. Führt FTX-Query parallel zur Embedding-Berechnung aus; Query-Embeddings werden gecached.
+Hybrid search in the Event Log (BM25 via FTX index + Vector via HNSW + RRF fusion) without router. Runs FTX query in parallel with embedding computation; query embeddings are cached.
 
-| Parameter | Typ | Pflicht | Beschreibung |
-|-----------|-----|---------|-------------|
-| `query` | `string` | ja | Suchbegriff |
-| `since` | `string` | nein | ISO-Timestamp (untere Grenze) |
-| `until` | `string` | nein | ISO-Timestamp (obere Grenze) |
-| `limit` | `int` | nein | Max. Ergebnisse (Standard: 10) |
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `query` | `string` | yes | Search term |
+| `since` | `string` | no | ISO timestamp (lower bound) |
+| `until` | `string` | no | ISO timestamp (upper bound) |
+| `limit` | `int` | no | Max results (default: 10) |
 
-**Rückgabe:**
+**Returns:**
 
 ```json
 {
   "events": [
     {
       "id": "event:abc",
-      "content": "Alice arbeitet bei Acme Corp…",
+      "content": "Alice works at Acme Corp…",
       "timestamp": "2026-06-29T15:00:00Z",
       "source": "user_input",
       "search_type": "lexical",
@@ -271,7 +271,7 @@ Hybride Suche im Event Log (BM25 über FTX-Index + Vector über HNSW + RRF-Fusio
     },
     {
       "id": "event:def",
-      "content": "Bob arbeitet bei Beta Inc…",
+      "content": "Bob works at Beta Inc…",
       "timestamp": "2026-06-28T12:00:00Z",
       "source": "user_input",
       "search_type": "vector",
@@ -287,15 +287,15 @@ Hybride Suche im Event Log (BM25 über FTX-Index + Vector über HNSW + RRF-Fusio
 
 #### `kg_query`
 
-Direkte Graph-Traversal-Abfrage auf dem temporalen Knowledge Graph.
+Direct graph traversal query on the temporal Knowledge Graph.
 
-| Parameter | Typ | Pflicht | Beschreibung |
-|-----------|-----|---------|-------------|
-| `subject` | `string` | nein | Filter nach Subjekt-Name (Teilstring) |
-| `predicate` | `string` | nein | Exaktes Prädikat |
-| `at_time` | `string` | nein | ISO-Timestamp — gibt nur Facts zurück, die zu diesem Zeitpunkt gültig waren |
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `subject` | `string` | no | Filter by subject name (substring) |
+| `predicate` | `string` | no | Exact predicate |
+| `at_time` | `string` | no | ISO timestamp — returns only facts valid at that time |
 
-**Rückgabe:**
+**Returns:**
 
 ```json
 {
@@ -321,21 +321,21 @@ Direkte Graph-Traversal-Abfrage auf dem temporalen Knowledge Graph.
 
 #### `semantic_search`
 
-Reiner Vektor-Suchpfad ohne Knowledge Graph. Nutzt SurrealDBs `vector::similarity::cosine()` direkt in SQL.
+Pure vector search path without Knowledge Graph. Uses SurrealDB's `vector::similarity::cosine()` directly in SQL.
 
-| Parameter | Typ | Pflicht | Beschreibung |
-|-----------|-----|---------|-------------|
-| `query` | `string` | ja | Suchbegriff |
-| `top_k` | `int` | nein | Anzahl Top-Ergebnisse (Standard: 5) |
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `query` | `string` | yes | Search term |
+| `top_k` | `int` | no | Number of top results (default: 5) |
 
-**Rückgabe:**
+**Returns:**
 
 ```json
 {
   "events": [
     {
       "id": "event:abc",
-      "content": "Alice arbeitet bei Acme Corp…",
+      "content": "Alice works at Acme Corp…",
       "score": 0.87
     }
   ],
@@ -343,21 +343,21 @@ Reiner Vektor-Suchpfad ohne Knowledge Graph. Nutzt SurrealDBs `vector::similarit
 }
 ```
 
-**Hinweis:** Die Cosine Similarity wird serverseitig in SurrealDB berechnet (`ORDER BY vector::similarity::cosine(embedding, $query_vec) DESC`). Das Embedding-Feld wird in der Antwort automatisch entfernt.
+**Note:** Cosine similarity is computed server-side in SurrealDB (`ORDER BY vector::similarity::cosine(embedding, $query_vec) DESC`). The embedding field is automatically removed from the response.
 
 ---
 
-### Schicht 3 — Introspection Tools
+### Layer 3 — Introspection Tools
 
-Für Debugging, Meta-Reasoning und Eval-Setup. Machen den Stack von anderen Systemen unterscheidbar.
+For debugging, meta-reasoning, and evaluation setup. These distinguish the stack from other systems.
 
 #### `memory_stats`
 
-Gibt Statistiken über den aktuellen Zustand des Memory Systems zurück.
+Returns statistics about the current state of the Memory System.
 
-**Keine Parameter.**
+**No parameters.**
 
-**Rückgabe:**
+**Returns:**
 
 ```json
 {
@@ -370,30 +370,30 @@ Gibt Statistiken über den aktuellen Zustand des Memory Systems zurück.
 }
 ```
 
-| Feld | Beschreibung |
-|------|-------------|
-| `event_count` | Gesamtzahl Events im Raw Log |
-| `entity_count` | Gesamtzahl Entitäten im KG |
-| `fact_count` | Anzahl aktiver (nicht invaliderter) Facts |
-| `oldest_event` | Timestamp des ältesten Events |
-| `newest_event` | Timestamp des neuesten Events |
-| `gate_pass_rate` | Anteil `"extract"`-Entscheidungen an allen Gate-Entscheidungen (global) |
+| Field | Description |
+|-------|-------------|
+| `event_count` | Total events in the Raw Log |
+| `entity_count` | Total entities in the KG |
+| `fact_count` | Number of active (non-invalidated) facts |
+| `oldest_event` | Timestamp of the oldest event |
+| `newest_event` | Timestamp of the newest event |
+| `gate_pass_rate` | Ratio of `"extract"` decisions to all gate decisions (global) |
 
 ---
 
 #### `explain_routing`
 
-Erklärt, warum der Router eine bestimmte Retrieval-Strategie für eine Query gewählt hat. Gold wert für Eval-Setup und Debugging.
+Explains why the router chose a specific retrieval strategy for a query. Invaluable for evaluation setup and debugging.
 
-| Parameter | Typ | Pflicht | Beschreibung |
-|-----------|-----|---------|-------------|
-| `query` | `string` | ja | Die zu klassifizierende Query |
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `query` | `string` | yes | The query to classify |
 
-**Rückgabe:**
+**Returns:**
 
 ```json
 {
-  "query": "Wo arbeitet Alice?",
+  "query": "Where does Alice work?",
   "classified_as": "factual",
   "confidence": 1.0,
   "strategy_selected": "knowledge_graph_first",
@@ -405,23 +405,23 @@ Erklärt, warum der Router eine bestimmte Retrieval-Strategie für eine Query ge
 
 ---
 
-### Schicht 4 — Maintenance Tools
+### Layer 4 — Maintenance Tools
 
-Weniger häufig gebraucht, aber essenziell für Langzeitbetrieb.
+Used less frequently, but essential for long-term operation.
 
 #### `memory_forget`
 
-Soft-Delete: Markiert ein Event oder eine Entität als vergessen, ohne den Raw Log zu verändern. Retrieval filtert automatisch `WHERE forgotten != true`.
+Soft-delete: Marks an event or entity as forgotten without altering the Raw Log. Retrieval automatically filters `WHERE forgotten != true`.
 
-| Parameter | Typ | Pflicht | Beschreibung |
-|-----------|-----|---------|-------------|
-| `event_id` | `string` | nein* | SurrealDB Event-ID (z.B. `"event:abc123"`) |
-| `entity` | `string` | nein* | Entitätsname (Teilstring-Suche) |
-| `reason` | `string` | nein | Grund für das Vergessen |
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `event_id` | `string` | no* | SurrealDB event ID (e.g. `"event:abc123"`) |
+| `entity` | `string` | no* | Entity name (substring search) |
+| `reason` | `string` | no | Reason for forgetting |
 
-\* Genau einer von `event_id` oder `entity` muss angegeben werden.
+\* Exactly one of `event_id` or `entity` must be provided.
 
-**Rückgabe:**
+**Returns:**
 
 ```json
 {
@@ -431,20 +431,20 @@ Soft-Delete: Markiert ein Event oder eine Entität als vergessen, ohne den Raw L
 }
 ```
 
-**Intern:** `UPDATE <id> SET forgotten = true`
+**Internally:** `UPDATE <id> SET forgotten = true`
 
 ---
 
 #### `memory_consolidate`
 
-Manueller Trigger für Conservative Maintenance — nur lokale Patches, kein globales Reindexieren.
+Manual trigger for Conservative Maintenance — local patches only, no global reindexing.
 
-| Parameter | Typ | Pflicht | Beschreibung |
-|-----------|-----|---------|-------------|
-| `scope` | `string` | ja | `"local"` (Standard) oder `"entity"` |
-| `entity` | `string` | nein | Entitätsname (nur bei `scope="entity"`) |
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `scope` | `string` | yes | `"local"` (default) or `"entity"` |
+| `entity` | `string` | no | Entity name (only when `scope="entity"`) |
 
-**Rückgabe — `scope="local"`:**
+**Return — `scope="local"`:**
 
 ```json
 {
@@ -454,7 +454,7 @@ Manueller Trigger für Conservative Maintenance — nur lokale Patches, kein glo
 }
 ```
 
-**Rückgabe — `scope="entity"`:**
+**Return — `scope="entity"`:**
 
 ```json
 {
@@ -467,10 +467,10 @@ Manueller Trigger für Conservative Maintenance — nur lokale Patches, kein glo
 
 ---
 
-## Tool-Referenz (kompakt)
+## Tool Reference (compact)
 
-| Tool | Schicht | Eingabe | Ausgabe |
-|------|---------|---------|---------|
+| Tool | Layer | Input | Output |
+|------|-------|-------|--------|
 | `memory_store` | Core | `content`, `source?`, `metadata?` | `event_id`, `status` |
 | `memory_query` | Core | `query`, `cost_budget?` | `classified_as`, `strategy`, `results` |
 | `memory_update` | Core | `subject`, `predicate`, `new_value` | `invalidated_fact`, `new_fact` |
@@ -479,37 +479,43 @@ Manueller Trigger für Conservative Maintenance — nur lokale Patches, kein glo
 | `semantic_search` | Primitives | `query`, `top_k?` | `events[]`, `count` |
 | `memory_stats` | Introspection | — | `event_count`, `entity_count`, `fact_count`, `gate_pass_rate`, … |
 | `explain_routing` | Introspection | `query` | `classified_as`, `strategy_selected`, `reason` |
-| `memory_forget` | Maintenance | `event_id?` oder `entity?`, `reason?` | `forgotten_id`, `type` |
-| `memory_consolidate` | Maintenance | `scope`, `entity?` | `stale_facts_found` oder `status` |
+| `memory_forget` | Maintenance | `event_id?` or `entity?`, `reason?` | `forgotten_id`, `type` |
+| `memory_consolidate` | Maintenance | `scope`, `entity?` | `stale_facts_found` or `status` |
 
 ---
 
-## Server-Implementierung
+## Server Implementation
 
-Datei: `src/mcp/server.py`
+File: `src/mcp/server.py`
 
-### Technische Details
+### Technical Details
 
-**Framework:** [FastMCP](https://github.com/jlowin/fastmcp) — offizielle Python-Implementierung des Model Context Protocol SDKs von Anthropic.
+**Framework:** [FastMCP](https://github.com/jlowin/fastmcp) — official Python implementation of Anthropic's Model Context Protocol SDK.
 
-**SurrealDB-Zugriff:** Direkt über HTTP-SQL-Endpoint (`http://127.0.0.1:8000/sql`) mit Basic Auth (`root`/`root`). Jeder SQL-Batch wird mit `USE NS strata DB strata;` prefixiert, damit Statements nicht ins Leere laufen.
+**SurrealDB Access:** Direct via HTTP SQL endpoint (`http://127.0.0.1:8000/sql`) with Basic Auth (`root`/`root`). Each SQL batch is prefixed with `USE NS strata DB strata;` to prevent statements from targeting an empty namespace.
 
-**Embedding-Service:** `SentenceTransformer` mit Modell `nomic-ai/nomic-embed-text-v1.5` (768 Dimensionen, CUDA wenn verfügbar). Das Modell wird lazy geladen und gecacht.
+**Embedding Service:** `SentenceTransformer` with model `sentence-transformers/all-MiniLM-L6-v2` (384 dimensions, CUDA if available). The model is loaded lazily and cached. Query embeddings are LRU-cached with a capacity of 128 entries.
 
-**Antwort-Extraktion:** `_extract_result()` parst SurrealDBs mehrzeilige JSON-Responses (Liste von `{status, result}`-Objekten) und gibt den relevanten `result`-Teil zurück — robust gegen Multi-Statement-Batches und Metadaten-Items (`database`, `namespace`).
+**Connection Reuse:** A module-level `httpx.AsyncClient` is shared across all SurrealDB calls, eliminating TCP handshake overhead on every query. Circuit breaker and retry with jittered backoff protect against transient failures.
 
-### Wichtige Hilfsfunktionen
+**Response Extraction:** `_extract_result()` parses SurrealDB's multi-row JSON responses (list of `{status, result}` objects) and returns the relevant `result` portion — robust against multi-statement batches and metadata items (`database`, `namespace`).
 
-| Funktion | Zweck |
-|----------|-------|
-| `_query_surreal(sql)` | Führt SQL gegen SurrealDB aus, raise bei `ERR` |
-| `_extract_result(data, index)` | Extrahiert `result` aus SurrealDB-Response |
+### Key Helper Functions
+
+| Function | Purpose |
+|----------|---------|
+| `_query_surreal(sql)` | Executes SQL against SurrealDB, raises on `ERR` |
+| `_extract_result(data, index)` | Extracts `result` from SurrealDB response |
+| `_extract_result_batch(data)` | Extracts multiple results from a multi-statement batch |
+| `_get_client()` | Returns the shared `httpx.AsyncClient` singleton |
+| `_embed_query(query)` | Cached query embedding (LRU, max 128) |
+| `_clean_output(obj)` | Recursively removes `embedding` fields from output |
 
 ---
 
-## Integration mit anderen Komponenten
+## Integration with Other Components
 
-### Mit dem Query Classifier kombinieren
+### With the Query Classifier
 
 ```python
 from src.extraction.classifier import QueryClassifier
@@ -517,26 +523,26 @@ from src.router.policy import RoutingPolicy
 from src.planner.executor import RetrievalExecutor
 
 classifier = QueryClassifier()
-q_type, confidence = classifier.classify("Wo arbeitet Alice?")
+q_type, confidence = classifier.classify("Where does Alice work?")
 
 policy = RoutingPolicy()
 strategy = policy.get_strategy(q_type, confidence, "auto")
 
 executor = RetrievalExecutor()
-results = asyncio.run(executor.execute_strategy(strategy, "Wo arbeitet Alice?"))
+results = asyncio.run(executor.execute_strategy(strategy, "Where does Alice work?"))
 ```
 
-### Mit dem Entropy Gate kombinieren
+### With the Entropy Gate
 
 ```python
 from src.extraction.entropy_gate import EntropyGate
 
 gate = EntropyGate()
-decision = gate.should_extract("Alice arbeitet bei Acme Corp.")
+decision = gate.should_extract("Alice works at Acme Corp.")
 # → {"decision": "extract", "text_score": 0.4, "novelty": 0.8, "gate_score": 0.65}
 ```
 
-### Mit dem Conservative Maintainer kombinieren
+### With the Conservative Maintainer
 
 ```python
 from src.maintenance.conservative_maintainer import ConservativeMaintainer
@@ -552,76 +558,76 @@ maintainer.flush_pending()
 
 ### `RuntimeError: SurrealDB Error: Specify a namespace to use`
 
-Das Schema wurde nicht geladen oder der `USE NS/DB`-Prefix fehlt. Prüfe:
+The schema has not been loaded or the `USE NS/DB` prefix is missing. Check:
 
 ```bash
 python scripts/load_schema_optimized.py
 ```
 
-### `ConnectionError` beim Start des MCP-Servers
+### `ConnectionError` when starting the MCP Server
 
-SurrealDB-Container läuft nicht oder Port 8000 ist blockiert:
+SurrealDB container is not running or port 8000 is blocked:
 
 ```bash
 docker ps --filter "name=strata-surrealdb"
-# Falls nicht running:
+# If not running:
 cd sdb && docker-compose up -d
 ```
 
-### Embedding-Modell lädt extrem langsam
+### Embedding model loads extremely slowly
 
-Beim ersten Start wird `nomic-ai/nomic-embed-text-v1.5` von HuggingFace heruntergeladen (~500 MB). Danach liegt es im Cache unter `~/.cache/huggingface/hub/`. Für Offline-Betrieb vorher herunterladen:
+On first start, `sentence-transformers/all-MiniLM-L6-v2` is downloaded from HuggingFace (~90 MB). After that it is cached under `~/.cache/huggingface/hub/`. For offline operation, download beforehand:
 
 ```python
 from sentence_transformers import SentenceTransformer
-model = SentenceTransformer("nomic-ai/nomic-embed-text-v1.5")
-model.save("./models/nomic-embed-text-v1.5")
+model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
+model.save("./models/all-MiniLM-L6-v2")
 ```
 
 ### `datetime.utcnow()` Deprecation Warning
 
-Bereits behoben im Server (`datetime.now(timezone.utc)`). Falls andere Skripte noch `utcnow()` verwenden, ersetzen durch `datetime.now(timezone.utc)`.
+Already fixed in the server (`datetime.now(timezone.utc)`). If other scripts still use `utcnow()`, replace with `datetime.now(timezone.utc)`.
 
-### SurrealDB 3 Vektor-Index wird nicht genutzt
+### HNSW vector index is not being used
 
-SurrealDBs `MTREE`-Vektor-Index ist in dieser Umgebung konfiguriert, aber der MCP-Server berechnet Cosine Similarity in Python, weil die SQL-Syntax für Vektor-Distanzen in SurrealDB 3 noch instabil ist. Für produktive Workloads mit >10.000 Events sollte auf den SurrealDB-internen Vektor-Index migriert werden, sobald die Syntax stabil ist.
-
----
-
-## Bekannte Einschränkungen
-
-1. **SurrealDB läuft in-memory:** `docker-compose down` löscht alle Daten. Für Persistenz das Volume `surrealdb-data` in `docker-compose.yml` aktivieren (bereits konfiguriert).
-2. **Embedding-Berechnung bei `memory_store`:** Das Modell wird bei jedem Store-Call geladen (lazy). Bei hohem Throughput sollte ein persistent geladener Service verwendet werden.
-3. **`semantic_search` lädt alle Embeddings in Python:** Funktioniert bis ~50k Events. Für größere Datenmengen auf SurrealDB Vektor-Suche migrieren.
-4. **Kein Auth-Layer im MCP-Server:** Der MCP-Server selbst hat keine Authentifizierung. Zugriffskontrolle muss auf Transport-Ebene (z.B. lokaler Socket) oder im Client konfiguriert werden.
-5. **`memory_update` erstellt keine Entitäten automatisch:** Subjekt und Objekt müssen bereits als Entitäten existieren, sonst schlägt die Operation fehl.
+The HNSW index `event_embedding_vec` is defined on the `embedding` field with `DIST COSINE`. The vector search query (`ORDER BY vector::similarity::cosine(embedding, $vec) DESC`) may trigger a full scan if the query planner determines the index is not cost-effective. For production workloads with >10,000 events, ensure SurrealDB is using the HNSW index by checking `INFO FOR TABLE event;`.
 
 ---
 
-## Verwandte Dateien
+## Known Limitations
 
-| Datei | Zweck |
-|-------|-------|
-| `src/mcp/server.py` | MCP-Server-Implementierung (10 Tools) |
-| `docs/schema.surql` | SurrealDB-Schema (Event Log, KG, Indizes) |
-| `docs/helper_functions.surql` | DB-seitige Funktionen |
-| `docs/test_data.surql` | Beispiel-Testdaten |
-| `docker-compose.yml` | SurrealDB Container-Setup |
-| `scripts/load_schema_optimized.py` | Schema-Loader mit USE-Prefix |
-| `src/extraction/classifier.py` | Query-Klassifizierung (5 Typen) |
-| `src/router/policy.py` | Routing-Strategien |
-| `src/planner/executor.py` | Retrieval-Ausführung |
-| `src/maintenance/conservative_maintainer.py` | Maintenance-Engine |
-| `src/extraction/embedding_service.py` | Embedding-Service (SentenceTransformers) |
+1. **SurrealDB runs in-memory:** `docker-compose down` deletes all data. For persistence, enable the `surrealdb-data` volume in `docker-compose.yml` (already configured).
+2. **Embedding computation on `memory_store`:** The model is loaded on first call (lazy). For high throughput, a persistently loaded service should be used.
+3. **No Auth Layer on the MCP Server:** The MCP server itself has no authentication. Access control must be configured at the transport level (e.g. local socket) or in the client.
+4. **`memory_update` does not create entities automatically:** Subject and object must already exist as entities, otherwise the operation fails.
+5. **`event_log_search` is limited to 4× `limit` candidates per sub-search (FTX and vector):** For very large event logs, this may miss relevant results. Increase via `fn:` extensions if needed.
 
 ---
 
-## Nächste Schritte
+## Related Files
 
-- [ ] MCP-Server als persistenten Service aufsetzen (systemd / Docker)
-- [ ] SSE-Transport zusätzlich zu stdio implementieren (für Remote-Clients)
-- [ ] Auth-Layer für MCP-Server hinzufügen
-- [ ] Batch-`memory_store` für Bulk-Ingestion
-- [ ] Streaming-Responses für große Retrieval-Ergebnisse
-- [ ] Eval-Harness an MCP-Tools anbinden
-- [ ] Automatische Entity-Erstellung in `memory_update`
+| File | Purpose |
+|------|---------|
+| `src/mcp/server.py` | MCP server implementation (10 tools) |
+| `docs/schema.surql` | SurrealDB schema (Event Log, KG, indexes) |
+| `docs/helper_functions.surql` | DB-side functions |
+| `docs/test_data.surql` | Sample test data |
+| `docker-compose.yml` | SurrealDB container setup |
+| `scripts/load_schema_optimized.py` | Schema loader with USE prefix |
+| `src/extraction/classifier.py` | Query classification (5 types) |
+| `src/router/policy.py` | Routing strategies |
+| `src/planner/executor.py` | Retrieval execution |
+| `src/maintenance/conservative_maintainer.py` | Maintenance engine |
+| `src/extraction/embedding_service.py` | Embedding service (SentenceTransformers) |
+
+---
+
+## Next Steps
+
+- [ ] Set up MCP server as a persistent service (systemd / Docker)
+- [ ] Implement SSE transport in addition to stdio (for remote clients)
+- [ ] Add auth layer for MCP server
+- [ ] Batch `memory_store` for bulk ingestion
+- [ ] Streaming responses for large retrieval results
+- [ ] Connect eval harness to MCP tools
+- [ ] Automatic entity creation in `memory_update`
