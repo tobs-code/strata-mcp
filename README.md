@@ -1,5 +1,12 @@
 # Strata
 
+![Python](https://img.shields.io/badge/python-3.11%2B-blue)
+![Rust](https://img.shields.io/badge/rust-1.75%2B-orange)
+![SurrealDB](https://img.shields.io/badge/SurrealDB-3.1.5-8B5CF6)
+![License](https://img.shields.io/badge/license-Apache%202.0-green)
+![arXiv](https://img.shields.io/badge/arXiv-2606.24775-b31b1b)
+![PRs](https://img.shields.io/badge/PRs-welcome-brightgreen)
+
 > A workload-adaptive agent memory system combining event logs, knowledge graphs, and vector embeddings. Evidence-based architecture derived from [Zhou et al. arXiv:2606.24775](https://arxiv.org/abs/2606.24775).
 
 ---
