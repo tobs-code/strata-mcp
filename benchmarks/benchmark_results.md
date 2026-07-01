@@ -356,3 +356,194 @@ explain_routing      |       0.21 |       0.36 |      0
 ```
 
 ---
+
+## Benchmark Run: 2026-07-01 02:20:05
+
+### Summary
+
+| Tool | Avg (ms) | P95 (ms) | Min (ms) | Max (ms) | Errors |
+| :--- | :---: | :---: | :---: | :---: | :---: |
+| `memory_stats` | 5300.05 | 5464.49 | 5207.94 | 5464.49 | 0 |
+| `memory_store` | 235.94 | 251.79 | 225.91 | 251.79 | 0 |
+| `memory_query` | 410.61 | 434.83 | 384.51 | 434.83 | 0 |
+| `semantic_search` | 779.93 | 804.02 | 767.22 | 804.02 | 0 |
+| `event_log_search` | 747.99 | 758.49 | 742.59 | 758.49 | 0 |
+| `kg_query` | 779.16 | 809.69 | 743.16 | 809.69 | 0 |
+| `explain_routing` | 0.27 | 0.53 | 0.18 | 0.53 | 0 |
+
+### Full Execution Logs
+
+```text
+STRATA MCP Performance Benchmark - 2026-07-01 02:20:05
+============================================================
+System: Windows 10 (AMD64)
+Python: 3.11.9
+============================================================
+
+--- Benchmarking 'memory_stats' (10 iterations) ---
+[INFO] Starting background SurrealDB reconnect task
+  Avg: 5300.05ms
+  P95: 5464.49ms
+  Min/Max: 5207.94ms / 5464.49ms
+  Errors: 0
+
+--- Benchmarking 'memory_store' (10 iterations) ---
+[INFO] Initializing Embedding Service with model: sentence-transformers/all-MiniLM-L6-v2...
+[OK] Embedding Service initialized
+Entropy Gate Decision: {'decision': 'extract', 'text_entropy': 3.7411397202207834, 'normalized_entropy': 0.8313643822712852, 'novelty': 0.5076565639736005, 'composite_score': 0.6209543003777901, 'threshold': 0.55, 'alpha': 0.35, 'beta': 0.65, 'reason': 'Composite score 0.621 meets threshold 0.550'}
+  [KG] Found candidate entities: ['Benchmark']
+  [KG] Entity: Benchmark -> entity:4zkz17t86sd2in1bvpfh
+  [KG] Extraction complete: {'entities_created': 1, 'facts_created': 1}
+Entropy Gate Decision: {'decision': 'ignore', 'text_entropy': 3.7411397202207834, 'normalized_entropy': 0.8313643822712852, 'novelty': 0.3716276607543306, 'composite_score': 0.5325355132852647, 'threshold': 0.55, 'alpha': 0.35, 'beta': 0.65, 'reason': 'Composite score 0.533 does not meet threshold 0.550'}
+Entropy Gate Decision: {'decision': 'ignore', 'text_entropy': 3.7411397202207834, 'normalized_entropy': 0.8313643822712852, 'novelty': 0.24168867224708868, 'composite_score': 0.4480751707555574, 'threshold': 0.55, 'alpha': 0.35, 'beta': 0.65, 'reason': 'Composite score 0.448 does not meet threshold 0.550'}
+Entropy Gate Decision: {'decision': 'ignore', 'text_entropy': 3.7411397202207834, 'normalized_entropy': 0.8313643822712852, 'novelty': 0.11385437377834506, 'composite_score': 0.3649828767508741, 'threshold': 0.55, 'alpha': 0.35, 'beta': 0.65, 'reason': 'Composite score 0.365 does not meet threshold 0.550'}
+Entropy Gate Decision: {'decision': 'ignore', 'text_entropy': 3.7411397202207834, 'normalized_entropy': 0.8313643822712852, 'novelty': 2.220446049250313e-16, 'composite_score': 0.29097753379494995, 'threshold': 0.55, 'alpha': 0.35, 'beta': 0.65, 'reason': 'Composite score 0.291 does not meet threshold 0.550'}
+Entropy Gate Decision: {'decision': 'ignore', 'text_entropy': 3.7411397202207834, 'normalized_entropy': 0.8313643822712852, 'novelty': 2.220446049250313e-16, 'composite_score': 0.29097753379494995, 'threshold': 0.55, 'alpha': 0.35, 'beta': 0.65, 'reason': 'Composite score 0.291 does not meet threshold 0.550'}
+Entropy Gate Decision: {'decision': 'ignore', 'text_entropy': 3.7411397202207834, 'normalized_entropy': 0.8313643822712852, 'novelty': 2.220446049250313e-16, 'composite_score': 0.29097753379494995, 'threshold': 0.55, 'alpha': 0.35, 'beta': 0.65, 'reason': 'Composite score 0.291 does not meet threshold 0.550'}
+Entropy Gate Decision: {'decision': 'ignore', 'text_entropy': 3.7411397202207834, 'normalized_entropy': 0.8313643822712852, 'novelty': 2.220446049250313e-16, 'composite_score': 0.29097753379494995, 'threshold': 0.55, 'alpha': 0.35, 'beta': 0.65, 'reason': 'Composite score 0.291 does not meet threshold 0.550'}
+Entropy Gate Decision: {'decision': 'ignore', 'text_entropy': 3.7411397202207834, 'normalized_entropy': 0.8313643822712852, 'novelty': 2.220446049250313e-16, 'composite_score': 0.29097753379494995, 'threshold': 0.55, 'alpha': 0.35, 'beta': 0.65, 'reason': 'Composite score 0.291 does not meet threshold 0.550'}
+Entropy Gate Decision: {'decision': 'ignore', 'text_entropy': 3.7411397202207834, 'normalized_entropy': 0.8313643822712852, 'novelty': 2.220446049250313e-16, 'composite_score': 0.29097753379494995, 'threshold': 0.55, 'alpha': 0.35, 'beta': 0.65, 'reason': 'Composite score 0.291 does not meet threshold 0.550'}
+Entropy Gate Decision: {'decision': 'ignore', 'text_entropy': 3.7411397202207834, 'normalized_entropy': 0.8313643822712852, 'novelty': 2.220446049250313e-16, 'composite_score': 0.29097753379494995, 'threshold': 0.55, 'alpha': 0.35, 'beta': 0.65, 'reason': 'Composite score 0.291 does not meet threshold 0.550'}
+  Avg: 235.94ms
+  P95: 251.79ms
+  Min/Max: 225.91ms / 251.79ms
+  Errors: 0
+
+--- Benchmarking 'memory_query' (10 iterations) ---
+  Avg: 410.61ms
+  P95: 434.83ms
+  Min/Max: 384.51ms / 434.83ms
+  Errors: 0
+
+--- Benchmarking 'semantic_search' (10 iterations) ---
+  Avg: 779.93ms
+  P95: 804.02ms
+  Min/Max: 767.22ms / 804.02ms
+  Errors: 0
+
+--- Benchmarking 'event_log_search' (10 iterations) ---
+  Avg: 747.99ms
+  P95: 758.49ms
+  Min/Max: 742.59ms / 758.49ms
+  Errors: 0
+
+--- Benchmarking 'kg_query' (10 iterations) ---
+  Avg: 779.16ms
+  P95: 809.69ms
+  Min/Max: 743.16ms / 809.69ms
+  Errors: 0
+
+--- Benchmarking 'explain_routing' (10 iterations) ---
+  Avg: 0.27ms
+  P95: 0.53ms
+  Min/Max: 0.18ms / 0.53ms
+  Errors: 0
+
+============================================================
+Tool                 |   Avg (ms) |   P95 (ms) | Errors
+------------------------------------------------------------
+memory_stats         |    5300.05 |    5464.49 |      0
+memory_store         |     235.94 |     251.79 |      0
+memory_query         |     410.61 |     434.83 |      0
+semantic_search      |     779.93 |     804.02 |      0
+event_log_search     |     747.99 |     758.49 |      0
+kg_query             |     779.16 |     809.69 |      0
+explain_routing      |       0.27 |       0.53 |      0
+============================================================
+```
+
+---
+
+## Benchmark Run: 2026-07-01 02:45:01
+
+### Summary
+
+| Tool | Avg (ms) | P95 (ms) | Min (ms) | Max (ms) | Errors |
+| :--- | :---: | :---: | :---: | :---: | :---: |
+| `memory_stats` | 5135.50 | 5262.68 | 5007.17 | 5262.68 | 0 |
+| `memory_store` | 224.70 | 253.05 | 209.86 | 253.05 | 0 |
+| `memory_query` | 415.76 | 455.63 | 378.07 | 455.63 | 0 |
+| `semantic_search` | 782.41 | 821.84 | 773.44 | 821.84 | 0 |
+| `event_log_search` | 752.16 | 774.10 | 739.15 | 774.10 | 0 |
+| `kg_query` | 747.56 | 767.69 | 737.38 | 767.69 | 0 |
+| `explain_routing` | 0.20 | 0.23 | 0.18 | 0.23 | 0 |
+
+### Full Execution Logs
+
+```text
+STRATA MCP Performance Benchmark - 2026-07-01 02:45:01
+============================================================
+System: Windows 10 (AMD64)
+Python: 3.11.9
+============================================================
+
+--- Benchmarking 'memory_stats' (10 iterations) ---
+[INFO] Starting background SurrealDB reconnect task
+  Avg: 5135.50ms
+  P95: 5262.68ms
+  Min/Max: 5007.17ms / 5262.68ms
+  Errors: 0
+
+--- Benchmarking 'memory_store' (10 iterations) ---
+[INFO] Initializing Embedding Service with model: sentence-transformers/all-MiniLM-L6-v2...
+[OK] Embedding Service initialized
+Entropy Gate Decision: {'decision': 'ignore', 'text_entropy': 3.7411397202207834, 'normalized_entropy': 0.8313643822712852, 'novelty': 2.220446049250313e-16, 'composite_score': 0.29097753379494995, 'threshold': 0.55, 'alpha': 0.35, 'beta': 0.65, 'reason': 'Composite score 0.291 does not meet threshold 0.550'}
+Entropy Gate Decision: {'decision': 'ignore', 'text_entropy': 3.7411397202207834, 'normalized_entropy': 0.8313643822712852, 'novelty': 2.220446049250313e-16, 'composite_score': 0.29097753379494995, 'threshold': 0.55, 'alpha': 0.35, 'beta': 0.65, 'reason': 'Composite score 0.291 does not meet threshold 0.550'}
+Entropy Gate Decision: {'decision': 'ignore', 'text_entropy': 3.7411397202207834, 'normalized_entropy': 0.8313643822712852, 'novelty': 2.220446049250313e-16, 'composite_score': 0.29097753379494995, 'threshold': 0.55, 'alpha': 0.35, 'beta': 0.65, 'reason': 'Composite score 0.291 does not meet threshold 0.550'}
+Entropy Gate Decision: {'decision': 'ignore', 'text_entropy': 3.7411397202207834, 'normalized_entropy': 0.8313643822712852, 'novelty': 2.220446049250313e-16, 'composite_score': 0.29097753379494995, 'threshold': 0.55, 'alpha': 0.35, 'beta': 0.65, 'reason': 'Composite score 0.291 does not meet threshold 0.550'}
+Entropy Gate Decision: {'decision': 'ignore', 'text_entropy': 3.7411397202207834, 'normalized_entropy': 0.8313643822712852, 'novelty': 2.220446049250313e-16, 'composite_score': 0.29097753379494995, 'threshold': 0.55, 'alpha': 0.35, 'beta': 0.65, 'reason': 'Composite score 0.291 does not meet threshold 0.550'}
+Entropy Gate Decision: {'decision': 'ignore', 'text_entropy': 3.7411397202207834, 'normalized_entropy': 0.8313643822712852, 'novelty': 2.220446049250313e-16, 'composite_score': 0.29097753379494995, 'threshold': 0.55, 'alpha': 0.35, 'beta': 0.65, 'reason': 'Composite score 0.291 does not meet threshold 0.550'}
+Entropy Gate Decision: {'decision': 'ignore', 'text_entropy': 3.7411397202207834, 'normalized_entropy': 0.8313643822712852, 'novelty': 2.220446049250313e-16, 'composite_score': 0.29097753379494995, 'threshold': 0.55, 'alpha': 0.35, 'beta': 0.65, 'reason': 'Composite score 0.291 does not meet threshold 0.550'}
+Entropy Gate Decision: {'decision': 'ignore', 'text_entropy': 3.7411397202207834, 'normalized_entropy': 0.8313643822712852, 'novelty': 2.220446049250313e-16, 'composite_score': 0.29097753379494995, 'threshold': 0.55, 'alpha': 0.35, 'beta': 0.65, 'reason': 'Composite score 0.291 does not meet threshold 0.550'}
+Entropy Gate Decision: {'decision': 'ignore', 'text_entropy': 3.7411397202207834, 'normalized_entropy': 0.8313643822712852, 'novelty': 2.220446049250313e-16, 'composite_score': 0.29097753379494995, 'threshold': 0.55, 'alpha': 0.35, 'beta': 0.65, 'reason': 'Composite score 0.291 does not meet threshold 0.550'}
+Entropy Gate Decision: {'decision': 'ignore', 'text_entropy': 3.7411397202207834, 'normalized_entropy': 0.8313643822712852, 'novelty': 2.220446049250313e-16, 'composite_score': 0.29097753379494995, 'threshold': 0.55, 'alpha': 0.35, 'beta': 0.65, 'reason': 'Composite score 0.291 does not meet threshold 0.550'}
+Entropy Gate Decision: {'decision': 'ignore', 'text_entropy': 3.7411397202207834, 'normalized_entropy': 0.8313643822712852, 'novelty': 2.220446049250313e-16, 'composite_score': 0.29097753379494995, 'threshold': 0.55, 'alpha': 0.35, 'beta': 0.65, 'reason': 'Composite score 0.291 does not meet threshold 0.550'}
+  Avg: 224.70ms
+  P95: 253.05ms
+  Min/Max: 209.86ms / 253.05ms
+  Errors: 0
+
+--- Benchmarking 'memory_query' (10 iterations) ---
+  Avg: 415.76ms
+  P95: 455.63ms
+  Min/Max: 378.07ms / 455.63ms
+  Errors: 0
+
+--- Benchmarking 'semantic_search' (10 iterations) ---
+  Avg: 782.41ms
+  P95: 821.84ms
+  Min/Max: 773.44ms / 821.84ms
+  Errors: 0
+
+--- Benchmarking 'event_log_search' (10 iterations) ---
+  Avg: 752.16ms
+  P95: 774.10ms
+  Min/Max: 739.15ms / 774.10ms
+  Errors: 0
+
+--- Benchmarking 'kg_query' (10 iterations) ---
+  Avg: 747.56ms
+  P95: 767.69ms
+  Min/Max: 737.38ms / 767.69ms
+  Errors: 0
+
+--- Benchmarking 'explain_routing' (10 iterations) ---
+  Avg: 0.20ms
+  P95: 0.23ms
+  Min/Max: 0.18ms / 0.23ms
+  Errors: 0
+
+============================================================
+Tool                 |   Avg (ms) |   P95 (ms) | Errors
+------------------------------------------------------------
+memory_stats         |    5135.50 |    5262.68 |      0
+memory_store         |     224.70 |     253.05 |      0
+memory_query         |     415.76 |     455.63 |      0
+semantic_search      |     782.41 |     821.84 |      0
+event_log_search     |     752.16 |     774.10 |      0
+kg_query             |     747.56 |     767.69 |      0
+explain_routing      |       0.20 |       0.23 |      0
+============================================================
+```
+
+---

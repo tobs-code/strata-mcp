@@ -281,6 +281,7 @@ async def _query_surreal(sql: str) -> Any:
     }
     full_sql = f"USE NS {SURREAL_NS} DB {SURREAL_DB};\n{sql}"
 
+    # Read circuit state without holding lock while query runs
     async with _surreal_lock:
         circuit_open = _surreal_circuit_open
         failure_count = _surreal_failure_count
@@ -325,7 +326,7 @@ async def _query_surreal(sql: str) -> Any:
                             raise RuntimeError(
                                 f"SurrealDB Error: {item.get('information') or item.get('result')} | SQL: {sql[:120]}"
                             )
-                # success -> reset circuit state
+                # success -> reset circuit state (only lock for this update)
                 async with _surreal_lock:
                     _surreal_failure_count = 0
                     _surreal_circuit_open = False
@@ -355,9 +356,10 @@ async def _query_surreal(sql: str) -> Any:
     async with _surreal_lock:
         _surreal_circuit_open = _surreal_failure_count >= _CIRCUIT_OPEN_THRESHOLD
         opened = _surreal_circuit_open
+        current_failures = _surreal_failure_count
 
     raise RuntimeError(
-        f"SurrealDB unreachable after {max_retries} attempts (failures={_surreal_failure_count}, circuit={'open' if opened else 'closed'}): {last_exception}"
+        f"SurrealDB unreachable after {max_retries} attempts (failures={current_failures}, circuit={'open' if opened else 'closed'}): {last_exception}"
     )
 
 
@@ -691,7 +693,9 @@ async def memory_query(query: str, cost_budget: str = "auto") -> dict:
 @mcp.tool()
 async def memory_update(subject: str, predicate: str, new_value: str) -> dict:
     """Updates a fact in the KG via logical invalidation. Old fact gets valid_until, new fact created. 
-    Automatically infers entity types (e.g., 'organization' for companies/projects, otherwise 'concept') if entities are auto-created."""
+    Automatically infers entity types (e.g., 'organization' for companies/projects, otherwise 'concept') if entities are auto-created.
+    
+    Note: new_value must be an existing entity name in the KG (not a free-text value)."""
     subject_escaped = subject.replace("'", "\\'")
     predicate_escaped = predicate.replace("'", "\\'")
     new_value_escaped = new_value.replace("'", "\\'")
@@ -813,10 +817,13 @@ async def kg_query_endpoint(subject: Optional[str] = Query(None, description="Su
         for key in ("in", "out"):
             eid = fact.get(key)
             if isinstance(eid, dict) and eid.get("id") not in seen_ids:
-                entities.append(eid)
+                entities.append(_clean_output(eid))
                 seen_ids.add(eid.get("id"))
 
-    return {"facts": facts, "entities": entities, "count": len(facts)}
+    # Clean facts to remove embeddings
+    clean_facts = [_clean_output(fact) for fact in facts]
+
+    return {"facts": clean_facts, "entities": entities, "count": len(clean_facts)}
 
 
 @mcp.tool()
@@ -880,7 +887,10 @@ async def kg_query(subject: Optional[str] = None, predicate: Optional[str] = Non
                 entities.append({"id": val})
                 seen_ids.add(val)
 
-    return {"facts": facts, "entities": entities, "count": len(facts)}
+    # Clean facts to remove embeddings
+    clean_facts = [_clean_output(fact) for fact in facts]
+
+    return {"facts": clean_facts, "entities": entities, "count": len(clean_facts)}
 
 
 @mcp.tool()
@@ -951,7 +961,6 @@ async def semantic_search_endpoint(request_data: dict):
 @mcp.tool()
 async def memory_stats() -> dict:
     """Returns statistics about the memory system."""
-    # Use separate queries instead of multi-statement to avoid indexing issues
     event_sql = "SELECT count() AS count FROM event WHERE (forgotten = false OR forgotten IS NONE) GROUP ALL;"
     entity_sql = "SELECT count() AS count FROM entity WHERE (forgotten = false OR forgotten IS NONE) GROUP ALL;"
     fact_sql = "SELECT count() AS count FROM fact WHERE (valid_until IS NONE OR valid_until = NONE) AND (forgotten = false OR forgotten IS NONE) GROUP ALL;"
@@ -969,49 +978,45 @@ async def memory_stats() -> dict:
         "gate_pass_rate": 0.0
     }
 
-    try:
-        event_result = _extract_result(await _query_surreal(event_sql), 1)
-        if event_result and isinstance(event_result, list):
-            stats["event_count"] = event_result[0].get("count", 0)
-    except Exception as e:
-        print(f"[WARN] memory_stats event count failed: {e}")
+    async def safe_query(sql):
+        try:
+            return _extract_result(await _query_surreal(sql), 1)
+        except Exception as e:
+            print(f"[WARN] memory_stats query failed: {e}")
+            return None
 
-    try:
-        entity_result = _extract_result(await _query_surreal(entity_sql), 1)
-        if entity_result and isinstance(entity_result, list):
-            stats["entity_count"] = entity_result[0].get("count", 0)
-    except Exception as e:
-        print(f"[WARN] memory_stats entity count failed: {e}")
+    # Run all queries in parallel!
+    results = await asyncio.gather(
+        safe_query(event_sql),
+        safe_query(entity_sql),
+        safe_query(fact_sql),
+        safe_query(oldest_sql),
+        safe_query(newest_sql),
+        safe_query(gate_total_sql),
+        safe_query(gate_extracted_sql),
+        return_exceptions=True
+    )
 
-    try:
-        fact_result = _extract_result(await _query_surreal(fact_sql), 1)
-        if fact_result and isinstance(fact_result, list):
-            stats["fact_count"] = fact_result[0].get("count", 0)
-    except Exception as e:
-        print(f"[WARN] memory_stats fact count failed: {e}")
+    event_result, entity_result, fact_result, oldest_result, newest_result, gate_total_result, gate_extracted_result = results
 
-    try:
-        oldest_result = _extract_result(await _query_surreal(oldest_sql), 1)
-        if oldest_result and isinstance(oldest_result, list):
-            stats["oldest_event"] = oldest_result[0].get("timestamp")
-    except Exception:
-        pass
+    if event_result and isinstance(event_result, list):
+        stats["event_count"] = event_result[0].get("count", 0)
 
-    try:
-        newest_result = _extract_result(await _query_surreal(newest_sql), 1)
-        if newest_result and isinstance(newest_result, list):
-            stats["newest_event"] = newest_result[0].get("timestamp")
-    except Exception:
-        pass
+    if entity_result and isinstance(entity_result, list):
+        stats["entity_count"] = entity_result[0].get("count", 0)
 
-    try:
-        gate_total_result = _extract_result(await _query_surreal(gate_total_sql), 1)
-        gate_extracted_result = _extract_result(await _query_surreal(gate_extracted_sql), 1)
-        gate_total = gate_total_result[0].get("count", 0) if gate_total_result and isinstance(gate_total_result, list) else 0
-        gate_extracted = gate_extracted_result[0].get("count", 0) if gate_extracted_result and isinstance(gate_extracted_result, list) else 0
-        stats["gate_pass_rate"] = round(gate_extracted / gate_total, 3) if gate_total > 0 else 0.0
-    except Exception:
-        pass
+    if fact_result and isinstance(fact_result, list):
+        stats["fact_count"] = fact_result[0].get("count", 0)
+
+    if oldest_result and isinstance(oldest_result, list):
+        stats["oldest_event"] = oldest_result[0].get("timestamp")
+
+    if newest_result and isinstance(newest_result, list):
+        stats["newest_event"] = newest_result[0].get("timestamp")
+
+    gate_total = gate_total_result[0].get("count", 0) if gate_total_result and isinstance(gate_total_result, list) else 0
+    gate_extracted = gate_extracted_result[0].get("count", 0) if gate_extracted_result and isinstance(gate_extracted_result, list) else 0
+    stats["gate_pass_rate"] = round(gate_extracted / gate_total, 3) if gate_total > 0 else 0.0
 
     return stats
 

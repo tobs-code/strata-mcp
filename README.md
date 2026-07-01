@@ -13,7 +13,6 @@ Strata is a sophisticated agent memory system that intelligently classifies, rou
 ```
                   ┌──────────────────┐
                   │  MCP Server      │  (Python, stdio/HTTP)
-                  │  (Control Plane) │
                   └──────┬───────────┘
                          │
          ┌───────────────┼───────────────┐
@@ -115,12 +114,10 @@ Strata verfügt über ein integriertes Benchmark-System zur Messung der Tool-Lat
 
 | Tool | Durchschnitt (ms) | P95 (ms) | Optimierung |
 |------|-------------------|----------|-------------|
-| `memory_stats` | ~775 ms | ~820 ms | Multi-Statement Batching |
-| `memory_query` | ~350 ms | ~400 ms | Hybrid Retrieval |
-| `memory_store` | ~800 ms | ~850 ms | CUDA-beschleunigt |
+| `memory_stats` | 5135.50 |  5262.68 | | Multi-Statement Batching |
+| `memory_query` | 415.76 | 455.63 | Hybrid Retrieval |
+| `memory_store` | 224.70 |  253.05 | Embeedings CUDA-beschleunigt |
 | `explain_routing` | < 1 ms | < 1 ms | Pure Logic |
-
-Das `memory_stats` Tool wurde durch **SQL-Batching** um ca. **85% optimiert** (von ursprünglich >5s).
 
 ### Benchmark ausführen
 
@@ -166,7 +163,7 @@ composite = alpha * normalized_text_entropy + beta * embedding_novelty
 
 **Calibration note:** `alpha`, `beta`, and `threshold` are currently **initial defaults**. Use the logged `gate_log` entries to tune them against real traffic and find the sweet spot for your workload.
 
-**MCP path status:** The current MCP memory tools (`memory_store`, query endpoints) write to the raw event log but do **not** invoke the entropy gate. To populate `gate_log`, call `EntropyGate.ingest()` from your ingestion pipeline or add a wrapper around the memory write path.
+**MCP path status:** The current MCP memory tools (`memory_store`, query endpoints) write to the raw event log **and invoke the entropy gate**. The `memory_store` tool calls `EntropyGate.ingest()` which logs decisions to `gate_log` for calibration.
 
 ---
 
