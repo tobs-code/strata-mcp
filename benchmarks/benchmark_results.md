@@ -547,3 +547,97 @@ explain_routing      |       0.20 |       0.23 |      0
 ```
 
 ---
+
+## Benchmark Run: 2026-07-01 03:29:48
+
+### Summary
+
+| Tool | Avg (ms) | P95 (ms) | Min (ms) | Max (ms) | Errors |
+| :--- | :---: | :---: | :---: | :---: | :---: |
+| `memory_stats` | 5143.42 | 5250.86 | 5045.51 | 5250.86 | 0 |
+| `memory_store` | 226.81 | 256.07 | 191.51 | 256.07 | 0 |
+| `memory_query` | 403.11 | 424.83 | 393.38 | 424.83 | 0 |
+| `semantic_search` | 816.28 | 873.67 | 781.91 | 873.67 | 0 |
+| `event_log_search` | 760.35 | 785.13 | 746.04 | 785.13 | 0 |
+| `kg_query` | 761.93 | 798.46 | 746.03 | 798.46 | 0 |
+| `explain_routing` | 0.19 | 0.22 | 0.18 | 0.22 | 0 |
+
+### Full Execution Logs
+
+```text
+STRATA MCP Performance Benchmark - 2026-07-01 03:29:48
+============================================================
+System: Windows 10 (AMD64)
+Python: 3.11.9
+============================================================
+
+--- Benchmarking 'memory_stats' (10 iterations) ---
+[INFO] Starting background SurrealDB reconnect task
+  Avg: 5143.42ms
+  P95: 5250.86ms
+  Min/Max: 5045.51ms / 5250.86ms
+  Errors: 0
+
+--- Benchmarking 'memory_store' (10 iterations) ---
+[INFO] Initializing Embedding Service with model: sentence-transformers/all-MiniLM-L6-v2...
+[OK] Embedding Service initialized
+Entropy Gate Decision: {'decision': 'ignore', 'text_entropy': 3.7411397202207834, 'normalized_entropy': 0.8313643822712852, 'novelty': 2.220446049250313e-16, 'composite_score': 0.29097753379494995, 'threshold': 0.55, 'alpha': 0.35, 'beta': 0.65, 'reason': 'Composite score 0.291 does not meet threshold 0.550'}
+Entropy Gate Decision: {'decision': 'ignore', 'text_entropy': 3.7411397202207834, 'normalized_entropy': 0.8313643822712852, 'novelty': 2.220446049250313e-16, 'composite_score': 0.29097753379494995, 'threshold': 0.55, 'alpha': 0.35, 'beta': 0.65, 'reason': 'Composite score 0.291 does not meet threshold 0.550'}
+Entropy Gate Decision: {'decision': 'ignore', 'text_entropy': 3.7411397202207834, 'normalized_entropy': 0.8313643822712852, 'novelty': 2.220446049250313e-16, 'composite_score': 0.29097753379494995, 'threshold': 0.55, 'alpha': 0.35, 'beta': 0.65, 'reason': 'Composite score 0.291 does not meet threshold 0.550'}
+Entropy Gate Decision: {'decision': 'ignore', 'text_entropy': 3.7411397202207834, 'normalized_entropy': 0.8313643822712852, 'novelty': 2.220446049250313e-16, 'composite_score': 0.29097753379494995, 'threshold': 0.55, 'alpha': 0.35, 'beta': 0.65, 'reason': 'Composite score 0.291 does not meet threshold 0.550'}
+Entropy Gate Decision: {'decision': 'ignore', 'text_entropy': 3.7411397202207834, 'normalized_entropy': 0.8313643822712852, 'novelty': 2.220446049250313e-16, 'composite_score': 0.29097753379494995, 'threshold': 0.55, 'alpha': 0.35, 'beta': 0.65, 'reason': 'Composite score 0.291 does not meet threshold 0.550'}
+Entropy Gate Decision: {'decision': 'ignore', 'text_entropy': 3.7411397202207834, 'normalized_entropy': 0.8313643822712852, 'novelty': 2.220446049250313e-16, 'composite_score': 0.29097753379494995, 'threshold': 0.55, 'alpha': 0.35, 'beta': 0.65, 'reason': 'Composite score 0.291 does not meet threshold 0.550'}
+Entropy Gate Decision: {'decision': 'ignore', 'text_entropy': 3.7411397202207834, 'normalized_entropy': 0.8313643822712852, 'novelty': 2.220446049250313e-16, 'composite_score': 0.29097753379494995, 'threshold': 0.55, 'alpha': 0.35, 'beta': 0.65, 'reason': 'Composite score 0.291 does not meet threshold 0.550'}
+Entropy Gate Decision: {'decision': 'ignore', 'text_entropy': 3.7411397202207834, 'normalized_entropy': 0.8313643822712852, 'novelty': 2.220446049250313e-16, 'composite_score': 0.29097753379494995, 'threshold': 0.55, 'alpha': 0.35, 'beta': 0.65, 'reason': 'Composite score 0.291 does not meet threshold 0.550'}
+Entropy Gate Decision: {'decision': 'ignore', 'text_entropy': 3.7411397202207834, 'normalized_entropy': 0.8313643822712852, 'novelty': 2.220446049250313e-16, 'composite_score': 0.29097753379494995, 'threshold': 0.55, 'alpha': 0.35, 'beta': 0.65, 'reason': 'Composite score 0.291 does not meet threshold 0.550'}
+Entropy Gate Decision: {'decision': 'ignore', 'text_entropy': 3.7411397202207834, 'normalized_entropy': 0.8313643822712852, 'novelty': 2.220446049250313e-16, 'composite_score': 0.29097753379494995, 'threshold': 0.55, 'alpha': 0.35, 'beta': 0.65, 'reason': 'Composite score 0.291 does not meet threshold 0.550'}
+Entropy Gate Decision: {'decision': 'ignore', 'text_entropy': 3.7411397202207834, 'normalized_entropy': 0.8313643822712852, 'novelty': 2.220446049250313e-16, 'composite_score': 0.29097753379494995, 'threshold': 0.55, 'alpha': 0.35, 'beta': 0.65, 'reason': 'Composite score 0.291 does not meet threshold 0.550'}
+  Avg: 226.81ms
+  P95: 256.07ms
+  Min/Max: 191.51ms / 256.07ms
+  Errors: 0
+
+--- Benchmarking 'memory_query' (10 iterations) ---
+  Avg: 403.11ms
+  P95: 424.83ms
+  Min/Max: 393.38ms / 424.83ms
+  Errors: 0
+
+--- Benchmarking 'semantic_search' (10 iterations) ---
+  Avg: 816.28ms
+  P95: 873.67ms
+  Min/Max: 781.91ms / 873.67ms
+  Errors: 0
+
+--- Benchmarking 'event_log_search' (10 iterations) ---
+  Avg: 760.35ms
+  P95: 785.13ms
+  Min/Max: 746.04ms / 785.13ms
+  Errors: 0
+
+--- Benchmarking 'kg_query' (10 iterations) ---
+  Avg: 761.93ms
+  P95: 798.46ms
+  Min/Max: 746.03ms / 798.46ms
+  Errors: 0
+
+--- Benchmarking 'explain_routing' (10 iterations) ---
+  Avg: 0.19ms
+  P95: 0.22ms
+  Min/Max: 0.18ms / 0.22ms
+  Errors: 0
+
+============================================================
+Tool                 |   Avg (ms) |   P95 (ms) | Errors
+------------------------------------------------------------
+memory_stats         |    5143.42 |    5250.86 |      0
+memory_store         |     226.81 |     256.07 |      0
+memory_query         |     403.11 |     424.83 |      0
+semantic_search      |     816.28 |     873.67 |      0
+event_log_search     |     760.35 |     785.13 |      0
+kg_query             |     761.93 |     798.46 |      0
+explain_routing      |       0.19 |       0.22 |      0
+============================================================
+```
+
+---
