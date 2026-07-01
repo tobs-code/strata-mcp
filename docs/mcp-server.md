@@ -247,7 +247,7 @@ Für STRATAs, die mehr Kontrolle über den Retrieval-Prozess brauchen und den Ro
 
 #### `event_log_search`
 
-Hybride Suche im Event Log (BM25 + Vector + RRF-Fusion) ohne Router.
+Hybride Suche im Event Log (BM25 über FTX-Index + Vector über HNSW + RRF-Fusion) ohne Router. Führt FTX-Query parallel zur Embedding-Berechnung aus; Query-Embeddings werden gecached.
 
 | Parameter | Typ | Pflicht | Beschreibung |
 |-----------|-----|---------|-------------|
@@ -321,7 +321,7 @@ Direkte Graph-Traversal-Abfrage auf dem temporalen Knowledge Graph.
 
 #### `semantic_search`
 
-Reiner Vektor-Suchpfad ohne Knowledge Graph. Berechnet Cosine Similarity in Python zwischen Query-Embedding und allen gespeicherten Event-Embeddings.
+Reiner Vektor-Suchpfad ohne Knowledge Graph. Nutzt SurrealDBs `vector::similarity::cosine()` direkt in SQL.
 
 | Parameter | Typ | Pflicht | Beschreibung |
 |-----------|-----|---------|-------------|
@@ -336,7 +336,6 @@ Reiner Vektor-Suchpfad ohne Knowledge Graph. Berechnet Cosine Similarity in Pyth
     {
       "id": "event:abc",
       "content": "Alice arbeitet bei Acme Corp…",
-      "embedding": [0.024, -0.001, …],
       "score": 0.87
     }
   ],
@@ -344,7 +343,7 @@ Reiner Vektor-Suchpfad ohne Knowledge Graph. Berechnet Cosine Similarity in Pyth
 }
 ```
 
-**Hinweis:** Der Score (Cosine Similarity) wird client-seitig berechnet, da SurrealDB 3 in dieser Umgebung keine stabile Vektor-Distanz-SQL-Syntax bietet. Die Embeddings werden bei der Suche nicht aus der Datenbank entfernt.
+**Hinweis:** Die Cosine Similarity wird serverseitig in SurrealDB berechnet (`ORDER BY vector::similarity::cosine(embedding, $query_vec) DESC`). Das Embedding-Feld wird in der Antwort automatisch entfernt.
 
 ---
 
@@ -378,7 +377,7 @@ Gibt Statistiken über den aktuellen Zustand des Memory Systems zurück.
 | `fact_count` | Anzahl aktiver (nicht invaliderter) Facts |
 | `oldest_event` | Timestamp des ältesten Events |
 | `newest_event` | Timestamp des neuesten Events |
-| `gate_pass_rate` | Anteil `"extract"`-Entscheidungen an allen Gate-Entscheidungen (letzte 100) |
+| `gate_pass_rate` | Anteil `"extract"`-Entscheidungen an allen Gate-Entscheidungen (global) |
 
 ---
 
