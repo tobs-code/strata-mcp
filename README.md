@@ -108,18 +108,18 @@ cd src/mcp && python server.py
 
 ## Performance & Benchmarks
 
-Strata verfügt über ein integriertes Benchmark-System zur Messung der Tool-Latenz. Ergebnisse werden automatisch in `benchmarks/benchmark_results.md` protokolliert.
+Strata has an integrated benchmark system to measure tool latency. Results are automatically logged to `benchmarks/benchmark_results.md`.
 
-### Tool Performance (Stand: Juni 2026)
+### Tool Performance (as of June 2026)
 
-| Tool | Durchschnitt (ms) | P95 (ms) | Optimierung |
-|------|-------------------|----------|-------------|
-| `memory_stats` | 5135.50 |  5262.68 | | Multi-Statement Batching |
+| Tool | Average (ms) | P95 (ms) | Optimization |
+|------|--------------|----------|--------------|
+| `memory_stats` | 5135.50 |  5262.68 | Multi-Statement Batching |
 | `memory_query` | 415.76 | 455.63 | Hybrid Retrieval |
-| `memory_store` | 224.70 |  253.05 | Embeedings CUDA-beschleunigt |
+| `memory_store` | 224.70 |  253.05 | Embeddings CUDA-accelerated |
 | `explain_routing` | < 1 ms | < 1 ms | Pure Logic |
 
-### Benchmark ausführen
+### Run Benchmarks
 
 ```bash
 python benchmarks/mcp_performance.py
@@ -130,7 +130,7 @@ python benchmarks/mcp_performance.py
 ## Testing
 
 ```bash
-# Alle Tests (inkl. Router & Benchmark)
+# All tests (including Router & Benchmark)
 python tests/run_all_tests.py
 python scripts/test_router_comprehensive.py
 python benchmarks/mcp_performance.py
