@@ -20,6 +20,7 @@ load_dotenv()
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 from src.extraction.classifier import QueryClassifier
+from src.extraction.entropy_gate import escape_surrealql
 from src.router.policy import RoutingPolicy
 from src.router.cost_awareness import CostTracker
 
@@ -70,17 +71,17 @@ class STRATAEvalHarness:
         start = time.time()
         
         if strategy_name == "event_log_first":
-            sql = f"SELECT * FROM event WHERE content @@ '{query.replace("'", "''")}' ORDER BY timestamp DESC LIMIT 5;"
+            sql = f"SELECT * FROM event WHERE content @@ '{escape_surrealql(query)}' ORDER BY timestamp DESC LIMIT 5;"
             result = self.query_surreal(sql)
             num_queries = 1
         elif strategy_name == "knowledge_graph_first":
-            sql = f"SELECT * FROM entity WHERE name @@ '{query.replace("'", "''")}';"
+            sql = f"SELECT * FROM entity WHERE name @@ '{escape_surrealql(query)}';"
             result = self.query_surreal(sql)
             num_queries = 1
         else:
             # Hybrid fallback
-            sql1 = f"SELECT * FROM event WHERE content @@ '{query.replace("'", "''")}' LIMIT 3;"
-            sql2 = f"SELECT * FROM entity WHERE name @@ '{query.replace("'", "''")}' LIMIT 3;"
+            sql1 = f"SELECT * FROM event WHERE content @@ '{escape_surrealql(query)}' LIMIT 3;"
+            sql2 = f"SELECT * FROM entity WHERE name @@ '{escape_surrealql(query)}' LIMIT 3;"
             result = [self.query_surreal(sql1), self.query_surreal(sql2)]
             num_queries = 2
             

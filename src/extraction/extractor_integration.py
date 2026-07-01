@@ -11,7 +11,7 @@ import json
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 
 from src.extraction.coarse_extractor import ExtractionPipeline
-from src.extraction.entropy_gate import EntropyGate
+from src.extraction.entropy_gate import EntropyGate, escape_surrealql
 from src.extraction.embedding_service import get_embedding_service
 
 
@@ -136,7 +136,7 @@ class ExtractorIntegration:
         for entity_type, names in entities.items():
             mapped_type = entity_type_mapping.get(entity_type, entity_type)
             for name in names:
-                name_escaped = name.replace("'", "\\'")
+                name_escaped = escape_surrealql(name)
                 lookup_sql = (
                     f"SELECT id FROM entity WHERE name = '{name_escaped}' LIMIT 1;"
                 )
@@ -177,9 +177,9 @@ class ExtractorIntegration:
             if not subject_id or not object_id or subject_id == object_id:
                 continue
 
-            subject_escaped = subject_name.replace("'", "\\'")
-            predicate_escaped = predicate.replace("'", "\\'")
-            object_escaped = object_name.replace("'", "\\'")
+            subject_escaped = escape_surrealql(subject_name)
+            predicate_escaped = escape_surrealql(predicate)
+            object_escaped = escape_surrealql(object_name)
 
             sql = (
                 f"SELECT id FROM fact "

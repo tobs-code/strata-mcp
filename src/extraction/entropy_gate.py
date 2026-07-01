@@ -23,6 +23,18 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 from src.extraction.embedding_service import get_embedding_service, BaseEmbeddingService
 
 
+def escape_surrealql(value: str) -> str:
+    """Escape a string for safe use in a SurrealQL string literal."""
+    import re
+    value = value.replace('\\', '\\\\')
+    value = value.replace("'", "\\'")
+    value = value.replace('\n', '\\n')
+    value = value.replace('\r', '\\r')
+    value = value.replace('\t', '\\t')
+    value = re.sub(r'[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]', '', value)
+    return value
+
+
 class EntropyGateConfig:
     def __init__(
         self,
@@ -53,10 +65,10 @@ class EntropyGate:
     def _query_surreal(self, sql: str) -> List[Dict]:
         headers = {
             "Accept": "application/json",
-            "Content-Type": "text/plain",
+            "Content-Type": "text/plain; charset=utf-8",
         }
         full_sql = f"USE NS {self.surreal_ns} DB {self.surreal_db};\n{sql}"
-        response = requests.post(self.surreal_url, data=full_sql, headers=headers, auth=self.auth, timeout=30)
+        response = requests.post(self.surreal_url, data=full_sql.encode("utf-8"), headers=headers, auth=self.auth, timeout=30)
         try:
             data = response.json()
             if isinstance(data, list):
@@ -67,6 +79,9 @@ class EntropyGate:
             print(f"SurrealDB query failed: {e}")
             print(f"Response: {response.text}")
             return []
+
+    def _escape_surrealql(self, value: str) -> str:
+        return escape_surrealql(value)
 
     def _hash_content(self, text: str) -> str:
         return hashlib.sha256(text.encode("utf-8")).hexdigest()
@@ -188,13 +203,14 @@ class EntropyGate:
         """Log the entropy gate decision to database"""
         try:
             content_hash = self._hash_content(text)
+            decision_escaped = self._escape_surrealql(decision)
             sql = f"""
             CREATE gate_log SET 
                 content_hash = '{content_hash}',
                 text_score = {entropy},
                 novelty = {novelty},
                 gate_score = {composite_score},
-                decision = '{decision}';
+                decision = '{decision_escaped}';
             """
             result = self._query_surreal(sql)
             if not result or len(result) < 2 or result[1].get("status") != "OK":
@@ -246,7 +262,7 @@ class EntropyGate:
 
     def _ensure_entity(self, name: str) -> Optional[str]:
         """Legt eine Entity an, falls sie noch nicht existiert. Gibt die ID zurück."""
-        name_escaped = name.replace("'", "\\'")
+        name_escaped = self._escape_surrealql(name)
         entity_type = self._infer_entity_type(name)
         
         # Prüfen ob Entity bereits existiert
@@ -347,12 +363,17 @@ class EntropyGate:
         if len(text) > 100_000:
             print(f"Error: Content exceeds maximum storage length ({len(text)} > 100000) (source={source})")
             return None
+        if '\x00' in text:
+            print(f"Error: Content contains null bytes, rejecting (source={source})")
+            return None
 
-        # 0. Dedup: Prüfen ob exakt gleicher Content bereits existiert
+        # 0. Dedup: Prüfen ob exakt gleicher Content mit gleicher Source bereits existiert
         content_hash = self._hash_content(text)
+        source_escaped_dedup = self._escape_surrealql(source)
         dedup_sql = f"""
         SELECT id FROM event 
         WHERE content_hash = '{content_hash}'
+          AND source = '{source_escaped_dedup}'
           AND (forgotten IS NONE OR forgotten = false)
         LIMIT 1;
         """
@@ -362,7 +383,7 @@ class EntropyGate:
             if existing and len(existing) > 0:
                 event_id = existing[0].get("id")
                 if debug:
-                    print(f"  [Dedup] Found existing event {event_id} for identical content")
+                    print(f"  [Dedup] Found existing event {event_id} for identical content and source")
                 gate_result = self.should_extract(text)
                 if gate_result["decision"] == "extract" and event_id:
                     kg_result = self._extract_to_kg(text, event_id, debug)
@@ -370,27 +391,33 @@ class EntropyGate:
 
         # 1. IMMER in Raw Event Log speichern (ohne Gate!)
         embedding = self.embedding_service.embed_for_storage(text)
-        text_escaped = text.replace("'", "\\'")
+        text_escaped = self._escape_surrealql(text)
+        source_escaped = self._escape_surrealql(source)
         sql = f"""
         CREATE event SET 
             content = '{text_escaped}',
             content_hash = '{content_hash}',
-            source = '{source}',
+            source = '{source_escaped}',
             embedding = {embedding};
         """
+        event_id = None
+        result = None
         try:
             result = self._query_surreal(sql)
             if result and len(result) > 1:
                 event_result = result[1].get("result", [])
                 if event_result and isinstance(event_result, list) and len(event_result) > 0:
                     event_id = event_result[0].get("id")
-                else:
-                    event_id = None
-            else:
-                event_id = None
         except Exception as e:
-            print(f"Error saving to event log: {e}")
-            event_id = None
+            import sys
+            sys.stderr.write(f"[EntropyGate] Error saving to event log: {e}\n")
+            if result:
+                sys.stderr.write(f"[EntropyGate]   SurrealDB response: {result}\n")
+        
+        if event_id is None:
+            import sys
+            sys.stderr.write(f"[EntropyGate] WARNING: ingest returned no event_id\n")
+            sys.stderr.write(f"[EntropyGate]   source={source}, content_length={len(text)}, hash={content_hash[:16]}...\n")
         
         # 2. Entropy Gate prüfen
         gate_result = self.should_extract(text)

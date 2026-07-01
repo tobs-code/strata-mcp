@@ -9,6 +9,7 @@ from typing import Dict, List, Any, Optional
 import httpx
 import os
 from datetime import datetime, timedelta
+from src.extraction.entropy_gate import escape_surrealql
 
 # Try to load environment variables from .env file
 try:
@@ -127,7 +128,7 @@ class ConservativeMaintainer:
                 set_clauses = []
                 for key, value in updates.items():
                     if isinstance(value, str):
-                        escaped_value = value.replace("'", "\\'")
+                        escaped_value = escape_surrealql(value)
                         set_clauses.append(f"{key} = '{escaped_value}'")
                     else:
                         set_clauses.append(f"{key} = {json.dumps(value)}")

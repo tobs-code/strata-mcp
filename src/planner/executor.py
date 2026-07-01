@@ -23,9 +23,11 @@ except ImportError:
 # Import embedding service
 try:
     from src.extraction.embedding_service import get_embedding_service
+    from src.extraction.entropy_gate import escape_surrealql
 except ImportError:
     # Handle relative import when module is not installed
     from extraction.embedding_service import get_embedding_service
+    from extraction.entropy_gate import escape_surrealql
 
 # Import routing policy for budget tracking
 try:
@@ -123,7 +125,7 @@ class PlanExecutor:
     def _execute_event_log_first(self, query: str) -> Dict[str, Any]:
         """Execute event log first strategy"""
         try:
-            escaped_query = query.replace("'", "\\'")
+            escaped_query = escape_surrealql(query)
             if not escaped_query.strip():
                 sql = "SELECT * FROM event WHERE (forgotten IS NONE OR forgotten = false) ORDER BY timestamp DESC LIMIT 10;"
             else:
@@ -141,7 +143,7 @@ class PlanExecutor:
     def _execute_knowledge_graph_first(self, query: str) -> Dict[str, Any]:
         """Execute knowledge graph first strategy, with fallback to events"""
         try:
-            escaped_query = query.replace("'", "\\'")
+            escaped_query = escape_surrealql(query)
             # 1. Try to find entities matching the query
             sql = f"SELECT * FROM entity WHERE (name @@ '{escaped_query}' OR name CONTAINS '{escaped_query}' OR '{escaped_query}' CONTAINS name) AND (forgotten IS NONE OR forgotten = false) LIMIT 10;"
             raw = self._query_surreal(sql)
@@ -182,7 +184,7 @@ class PlanExecutor:
     def _execute_hybrid_with_graph_expansion(self, query: str) -> Dict[str, Any]:
         """Execute hybrid strategy with graph expansion"""
         try:
-            escaped_query = query.replace("'", "\\'")
+            escaped_query = escape_surrealql(query)
             if not escaped_query.strip():
                 events_sql = "SELECT * FROM event WHERE (forgotten IS NONE OR forgotten = false) ORDER BY timestamp DESC LIMIT 5;"
                 entities_sql = "SELECT * FROM entity WHERE (forgotten IS NONE OR forgotten = false) LIMIT 5;"
@@ -204,7 +206,7 @@ class PlanExecutor:
     def _execute_composite_kg_vector(self, query: str) -> Dict[str, Any]:
         """Execute composite knowledge graph and vector strategy"""
         try:
-            escaped_query = query.replace("'", "\\'")
+            escaped_query = escape_surrealql(query)
             if not escaped_query.strip():
                 sql = "SELECT * FROM event WHERE (forgotten IS NONE OR forgotten = false) ORDER BY timestamp DESC LIMIT 10;"
             else:
@@ -222,7 +224,7 @@ class PlanExecutor:
     def _execute_knowledge_graph_with_invalidation(self, query: str) -> Dict[str, Any]:
         """Execute knowledge graph with invalidation strategy"""
         try:
-            escaped_query = query.replace("'", "\\'")
+            escaped_query = escape_surrealql(query)
             sql = f"SELECT * FROM entity WHERE (name @@ '{escaped_query}' OR name CONTAINS '{escaped_query}') AND (valid_until IS NONE OR valid_until > time::now()) AND (forgotten IS NONE OR forgotten = false) LIMIT 10;"
             raw = self._query_surreal(sql)
             if isinstance(raw, dict):
@@ -247,7 +249,7 @@ class PlanExecutor:
             
             # 3. Entity search
             entities = []
-            escaped_query = query.replace("'", "\\'").lower()
+            escaped_query = escape_surrealql(query).lower()
             if escaped_query.strip():
                 # Use case-insensitive search for entity names
                 sql = f"SELECT * FROM entity WHERE (string::lowercase(name) CONTAINS '{escaped_query}' OR '{escaped_query}' CONTAINS string::lowercase(name)) AND (forgotten = NONE OR forgotten = false) LIMIT 5;"
@@ -325,7 +327,7 @@ class PlanExecutor:
             entities = []
             facts = []
             
-            escaped_query = query.replace("'", "\\'").lower()
+            escaped_query = escape_surrealql(query).lower()
             if escaped_query.strip():
                 # Search for entities using case-insensitive match
                 entity_sql = f"SELECT * FROM entity WHERE (string::lowercase(name) CONTAINS '{escaped_query}' OR '{escaped_query}' CONTAINS string::lowercase(name)) AND (forgotten = NONE OR forgotten = false) LIMIT 5;"
@@ -368,7 +370,7 @@ class PlanExecutor:
     def _execute_bm25_search(self, query: str) -> List[Dict[str, Any]]:
         """Execute keyword-based search using SurrealDB's full-text search (BM25 equivalent)"""
         try:
-            escaped_query = query.replace("'", "\\'")
+            escaped_query = escape_surrealql(query)
             if not escaped_query.strip():
                 sql = "SELECT *, search::score(1.0) AS relevance_score FROM event WHERE (forgotten IS NONE OR forgotten = false) ORDER BY timestamp DESC LIMIT 10;"
             else:
@@ -425,7 +427,7 @@ class PlanExecutor:
     def _execute_temporal_search(self, query: str) -> List[Dict[str, Any]]:
         """Execute temporal relevance search based on time proximity"""
         try:
-            escaped_query = query.replace("'", "\\'")
+            escaped_query = escape_surrealql(query)
             # We want recent events, regardless of content match if query is temporal? 
             # Actually, usually we still want some relevance.
             if not escaped_query.strip():

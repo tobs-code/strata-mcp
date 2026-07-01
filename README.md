@@ -13,7 +13,7 @@
 
 ## Overview
 
-Strata is a agent memory system that intelligently classifies, routes, plans, and executes queries across multiple storage and retrieval strategies. It consists of **Python** (MCP control plane) and **Rust** (core services) components working together.
+Strata is a agent memory system that intelligently classifies, routes, plans, and executes queries across multiple storage and retrieval strategies. It consists of standalone**Python** (MCP Server) and **Rust** (core services) components working together.
 
 ### Architecture
 

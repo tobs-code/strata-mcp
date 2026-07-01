@@ -38,6 +38,7 @@ from mcp.server.fastmcp import (
 
 from src.extraction.classifier import QueryClassifier
 from src.extraction.embedding_service import get_embedding_service
+from src.extraction.entropy_gate import escape_surrealql
 from src.maintenance.conservative_maintainer import ConservativeMaintainer
 from src.planner.executor import PlanExecutor, RetrievalExecutor
 from src.router.policy import RoutingPolicy
@@ -579,6 +580,13 @@ async def memory_store_endpoint(request_data: dict):
             "source": source,
             "message": "content must not be empty or whitespace-only",
         }
+    if '\x00' in content:
+        return {
+            "event_id": None,
+            "status": "error",
+            "source": source,
+            "message": "content contains null bytes, rejecting",
+        }
     if len(content) > MAX_CONTENT_LENGTH:
         return {
             "event_id": None,
@@ -589,10 +597,12 @@ async def memory_store_endpoint(request_data: dict):
 
     import hashlib
     content_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()
+    source_escaped_dedup = escape_surrealql(source)
 
     dedup_sql = f"""
     SELECT id FROM event 
     WHERE content_hash = '{content_hash}'
+      AND source = '{source_escaped_dedup}'
       AND (forgotten IS NONE OR forgotten = false)
     LIMIT 1;
     """
@@ -607,8 +617,8 @@ async def memory_store_endpoint(request_data: dict):
     embedding_list = await asyncio.to_thread(
         embedding_service.embed_for_storage, content
     )
-    content_escaped = content.replace("'", "\\'")
-    source_escaped = source.replace("'", "\\'")
+    content_escaped = escape_surrealql(content)
+    source_escaped = escape_surrealql(source)
     embedding_storage = "[" + ", ".join(str(v) for v in embedding_list) + "]"
 
     if metadata:
@@ -639,6 +649,8 @@ async def memory_store_endpoint(request_data: dict):
         event_id = event_result.get("id")
     else:
         event_id = None
+    if event_id is None:
+        return {"event_id": None, "status": "error", "source": source, "message": "storage failed"}
     return {"event_id": event_id, "status": "stored", "source": source}
 
 
@@ -725,6 +737,13 @@ async def memory_store(
             "source": source,
             "message": "content must not be empty or whitespace-only",
         }
+    if '\x00' in content:
+        return {
+            "event_id": None,
+            "status": "error",
+            "source": source,
+            "message": "content contains null bytes, rejecting",
+        }
     if len(content) > MAX_CONTENT_LENGTH:
         return {
             "event_id": None,
@@ -739,6 +758,14 @@ async def memory_store(
 
     # ingest() schreibt ins Event-Log, evaluiert Entropy, loggt in gate_log
     event_id = await asyncio.to_thread(gate.ingest, content, source, True)
+
+    if event_id is None:
+        return {
+            "event_id": None,
+            "status": "error",
+            "source": source,
+            "message": "storage failed - event could not be persisted",
+        }
 
     return {
         "event_id": event_id,
@@ -850,9 +877,9 @@ async def memory_update(subject: str, predicate: str, new_value: str) -> dict:
     Automatically infers entity types (e.g., 'organization' for companies/projects, otherwise 'concept') if entities are auto-created.
 
     Note: new_value must be an existing entity name in the KG (not a free-text value)."""
-    subject_escaped = subject.replace("'", "\\'")
-    predicate_escaped = predicate.replace("'", "\\'")
-    new_value_escaped = new_value.replace("'", "\\'")
+    subject_escaped = escape_surrealql(subject)
+    predicate_escaped = escape_surrealql(predicate)
+    new_value_escaped = escape_surrealql(new_value)
 
     def _infer_entity_type(name: str) -> str:
         """Simple heuristic to infer entity type from name."""
@@ -950,23 +977,23 @@ async def event_log_search_endpoint(
     if not query.strip():
         sql = f"SELECT * FROM event WHERE (forgotten IS NONE OR forgotten = false)"
         if since:
-            sql += f" AND timestamp >= '{since.replace(chr(39), chr(92) + chr(39))}'"
+            sql += f" AND timestamp >= '{escape_surrealql(since)}'"
         if until:
-            sql += f" AND timestamp <= '{until.replace(chr(39), chr(92) + chr(39))}'"
+            sql += f" AND timestamp <= '{escape_surrealql(until)}'"
         sql += f" ORDER BY timestamp DESC LIMIT {limit};"
         result = await _query_surreal(sql)
         events = _extract_result(result, 1)
         return {"events": _clean_output(events), "count": len(events)}
 
-    query_escaped = query.replace("'", "\\'")
+    query_escaped = escape_surrealql(query)
     time_filter = ""
     if since:
         time_filter += (
-            f" AND timestamp >= '{since.replace(chr(39), chr(92) + chr(39))}'"
+            f" AND timestamp >= '{escape_surrealql(since)}'"
         )
     if until:
         time_filter += (
-            f" AND timestamp <= '{until.replace(chr(39), chr(92) + chr(39))}'"
+            f" AND timestamp <= '{escape_surrealql(until)}'"
         )
 
     forgotten_filter = "(forgotten IS NONE OR forgotten = false)"
@@ -1046,15 +1073,15 @@ async def kg_query_endpoint(
     sql = "SELECT * FROM fact WHERE (valid_until = NONE OR valid_until = NULL) AND (forgotten = NONE OR forgotten = false)"
 
     if subject:
-        subject_escaped = subject.replace("'", "\\'")
+        subject_escaped = escape_surrealql(subject)
         sql += (
             f" AND (in.name CONTAINS '{subject_escaped}' OR in = '{subject_escaped}')"
         )
     if predicate:
-        predicate_escaped = predicate.replace("'", "\\'")
+        predicate_escaped = escape_surrealql(predicate)
         sql += f" AND predicate = '{predicate_escaped}'"
     if at_time:
-        at_time_escaped = at_time.replace("'", "\\'")
+        at_time_escaped = escape_surrealql(at_time)
         sql += f" AND valid_from <= '{at_time_escaped}'"
 
     sql += f" LIMIT {limit} FETCH in, out;"
@@ -1090,13 +1117,13 @@ async def event_log_search(
     limit: int = 10,
 ) -> dict:
     """Direct timeline query without router: hybrid search (BM25 + vector + RRF fusion)."""
-    query_escaped = query.replace("'", "\\'")
+    query_escaped = escape_surrealql(query)
     time_filter = ""
     if since:
-        since_escaped = since.replace("'", "\\'")
+        since_escaped = escape_surrealql(since)
         time_filter += f" AND timestamp >= '{since_escaped}'"
     if until:
-        until_escaped = until.replace("'", "\\'")
+        until_escaped = escape_surrealql(until)
         time_filter += f" AND timestamp <= '{until_escaped}'"
 
     forgotten_filter = "(forgotten IS NONE OR forgotten = false)"
@@ -1181,16 +1208,16 @@ async def kg_query(
     sql += " AND (forgotten = NONE OR forgotten = false)"
 
     if subject:
-        subject_escaped = subject.replace("'", "\\'")
+        subject_escaped = escape_surrealql(subject)
         # Robust check for subject name via the 'in' edge
         sql += (
             f" AND (in.name CONTAINS '{subject_escaped}' OR in = '{subject_escaped}')"
         )
     if predicate:
-        predicate_escaped = predicate.replace("'", "\\'")
+        predicate_escaped = escape_surrealql(predicate)
         sql += f" AND predicate = '{predicate_escaped}'"
     if at_time:
-        at_time_escaped = at_time.replace("'", "\\'")
+        at_time_escaped = escape_surrealql(at_time)
         sql += f" AND valid_from <= '{at_time_escaped}'"
 
     sql += f" LIMIT {limit} FETCH in, out;"
@@ -1479,7 +1506,7 @@ async def memory_forget(
 ) -> dict:
     """Forgets a memory by event_id or entity."""
     if event_id:
-        event_escaped = event_id.replace("'", "\\'")
+        event_escaped = escape_surrealql(event_id)
         check_sql = f"SELECT id FROM {event_escaped} LIMIT 1;"
         check_result = await _query_surreal(check_sql)
         events = _extract_result(check_result, 1)
@@ -1487,13 +1514,13 @@ async def memory_forget(
             return {"status": "error", "message": f"Event '{event_id}' not found"}
         sql = f"UPDATE {event_escaped} SET forgotten = true;"
         if reason:
-            reason_escaped = reason.replace("'", "\\'")
+            reason_escaped = escape_surrealql(reason)
             sql = f"UPDATE {event_escaped} SET forgotten = true, forget_reason = '{reason_escaped}';"
         await _query_surreal(sql)
         return {"forgotten_id": event_id, "type": "event", "reason": reason}
 
     if entity:
-        entity_escaped = entity.replace("'", "\\'")
+        entity_escaped = escape_surrealql(entity)
         if entity_escaped.startswith("entity:"):
             check_sql = f"SELECT id FROM {entity_escaped} LIMIT 1;"
             check_result = await _query_surreal(check_sql)
@@ -1512,7 +1539,7 @@ async def memory_forget(
             entity_id = entities[0]["id"]
         sql = f"UPDATE {entity_id} SET forgotten = true;"
         if reason:
-            reason_escaped = reason.replace("'", "\\'")
+            reason_escaped = escape_surrealql(reason)
             sql = f"UPDATE {entity_id} SET forgotten = true, forget_reason = '{reason_escaped}';"
         await _query_surreal(sql)
         return {"forgotten_id": entity_id, "type": "entity", "reason": reason}
@@ -1528,7 +1555,7 @@ async def memory_consolidate(
     maintainer = ConservativeMaintainer(debounce_seconds=0)
 
     if scope == "entity" and entity:
-        entity_escaped = entity.replace("'", "''")
+        entity_escaped = escape_surrealql(entity)
         find_sql = (
             f"SELECT id FROM entity WHERE name CONTAINS '{entity_escaped}' LIMIT 1;"
         )
