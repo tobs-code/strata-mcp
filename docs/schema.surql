@@ -37,6 +37,7 @@ DEFINE INDEX event_embedding_vec ON event FIELDS embedding HNSW DIMENSION 384 DI
 DEFINE TABLE entity SCHEMAFULL;
 DEFINE FIELD name ON entity TYPE string;
 DEFINE FIELD type ON entity TYPE string; -- z.B. "person", "organization", "concept"
+DEFINE FIELD embedding ON entity TYPE option<vector(f32, 384)>; -- For vector similarity search
 DEFINE FIELD metadata ON entity TYPE option<object>;
 DEFINE FIELD forgotten ON entity TYPE bool DEFAULT false;
 DEFINE FIELD forget_reason ON entity TYPE option<string>;
@@ -58,6 +59,8 @@ DEFINE FIELD metadata ON fact TYPE option<object>;
 -- Indizes für den KG
 DEFINE INDEX entity_name ON entity COLUMNS name;
 DEFINE INDEX entity_type ON entity COLUMNS type;
+-- Vector Index für Entity-Deduplizierung (Phase 3)
+DEFINE INDEX entity_embedding_vec ON entity FIELDS embedding HNSW DIMENSION 384 DIST COSINE;
 DEFINE INDEX fact_valid ON fact COLUMNS valid_from, valid_until;
 DEFINE INDEX fact_subject ON fact COLUMNS in;
 DEFINE INDEX fact_object ON fact COLUMNS out;

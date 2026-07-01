@@ -90,7 +90,7 @@ class EntropyGate:
     def calculate_char_entropy(self, text: str) -> float:
         """
         Shannon-Entropy auf Zeichenebene (wie LightMem)
-        Gibt *unnormalisierte* Entropy zurück (typisch 0-4.5)
+        Returns *unnormalized* entropy (typically 0-4.5)
         """
         if not text:
             return 0.0
@@ -113,9 +113,9 @@ class EntropyGate:
 
     def calculate_novelty(self, text: str) -> float:
         """
-        Novelty basierend auf Embedding-Ähnlichkeit mit bisherigen Inhalten in SurrealDB.
-        Gibt Wert zwischen 0 (keine novelty) und 1 (maximale novelty).
-        Nutzt SurrealDB's native Vektor-Funktionen.
+        Novelty based on embedding similarity against existing content in SurrealDB.
+        Returns value between 0 (no novelty) and 1 (maximum novelty).
+        Uses SurrealDB's native vector functions.
         """
         if not text.strip():
             return 0.0
@@ -223,55 +223,50 @@ class EntropyGate:
 
     def _extract_candidate_entities(self, text: str) -> List[str]:
         """
-        Extrahiert Kandidaten-Entities aus dem Text.
-        Nutzt Noun-Phrase-Extraktion (erkennt auch Kleinschreibung, nicht-englische Namen).
-        Fallback auf grossgeschriebene Wörter und CamelCase.
+        Extract candidate entities from text.
+        Uses spaCy NER as primary source, with regex fallback.
         """
         import re as _re
-        candidates = set()
+        
+        # Try spaCy-based extraction first
+        try:
+            from src.extraction.entity_utils import extract_entities_with_spacy
+            spacy_entities = extract_entities_with_spacy(text)
+            candidates = {entity["name"] for entity in spacy_entities}
+        except ImportError:
+            # If spaCy is not available, fall back to original regex approach
+            candidates = set()
 
-        # 1. Noun-Phrase-Extraktion (erkennt auch deutsche Substantive)
-        noun_phrases = extract_noun_phrases(text)
-        for phrase in noun_phrases:
-            candidates.add(phrase)
+        # If spaCy is not available or returns no entities, use original approach as fallback
+        if not candidates:
+            # 1. Noun-Phrase-Extraktion
+            noun_phrases = extract_noun_phrases(text)
+            for phrase in noun_phrases:
+                candidates.add(phrase)
 
-        # 2. Explizit nach deutschsprachigen Entities suchen
-        #    Deutsche Nomen werden großgeschrieben, aber nicht unbedingt
-        gmc_patterns = [
-            _re.compile(r'\b(?:Der|Die|Das|Ein|Eine)\s+([A-ZÄÖÜ][a-zäöüß]+(?:\s+[A-ZÄÖÜ][a-zäöüß]+)*)\b'),
-            _re.compile(r'\b[A-ZÄÖÜ][a-zäöüß]+(?:maschine|system|werk|zeug|stoff|kraft|daten|prozess|steuerung|anlage|gerät)\b'),
-            _re.compile(r'\b(?:[A-Z][a-z]+-)+[A-Z][a-z]+\b'),
-        ]
-        for pattern in gmc_patterns:
-            for match in pattern.finditer(text):
-                candidate = match.group(1) if match.lastindex else match.group(0)
-                candidate = candidate.strip()
+            # 2. Kleingeschriebene mehrteilige Konzepte (z.B. "quantum computing", "social contract")
+            concept_patterns = [
+                _re.compile(r'\b[a-z]{3,}(?:\s+[a-z]{3,}){1,2}\b'),
+            ]
+            for pattern in concept_patterns:
+                for match in pattern.finditer(text):
+                    candidate = match.group(0).strip()
+                    words = candidate.split()
+                    if len(words) >= 2 and len(candidate) >= 5:
+                        if is_content_phrase(words):
+                            candidates.add(candidate)
+
+            # 3. CamelCase-Wörter (z.B. "FastMCP", "SurrealDB")
+            for match in _re.finditer(r'\b([A-Z][a-z]+[A-Z][a-zA-Z]*)\b', text):
+                candidate = match.group(1).strip()
                 if len(candidate) >= 3:
                     candidates.add(candidate)
 
-        # 3. Mehrteilige Konzepte ohne Grossbuchstaben (z.B. "quantum computing", "social contract")
-        concept_patterns = [
-            _re.compile(r'\b[a-zäöüß]{3,}(?:\s+[a-zäöüß]{3,}){1,2}\b'),
-        ]
-        for pattern in concept_patterns:
-            for match in pattern.finditer(text):
-                candidate = match.group(0).strip()
-                words = candidate.split()
-                if len(words) >= 2 and len(candidate) >= 5:
-                    if is_content_phrase(words):
-                        candidates.add(candidate)
-
-        # 4. CamelCase-Wörter (z.B. "EntropyGate", "FastMCP")
-        for match in _re.finditer(r'\b([A-Z][a-z]+[A-Z][a-zA-Z]*)\b', text):
-            candidate = match.group(1).strip()
-            if len(candidate) >= 3:
-                candidates.add(candidate)
-
-        # 5. Abkürzungen (z.B. "ATP", "CRISPR", "DNA")
-        for match in _re.finditer(r'\b([A-Z]{2,})\b', text):
-            candidate = match.group(1).strip()
-            if len(candidate) >= 2:
-                candidates.add(candidate)
+            # 4. Abkürzungen (z.B. "API", "NER", "KG")
+            for match in _re.finditer(r'\b([A-Z]{2,})\b', text):
+                candidate = match.group(1).strip()
+                if len(candidate) >= 2:
+                    candidates.add(candidate)
 
         return list(candidates)
 
@@ -291,25 +286,23 @@ class EntropyGate:
             return "co_occurs_with", 0.5
 
     def _infer_relation_type(self, text: str, entity_a: str, entity_b: str, confidence: float) -> str:
-        """Bestimme den Beziehungstyp zwischen zwei Entities."""
+        """Determine the relationship type between two entities."""
         lower_text = text.lower()
         a_lower = entity_a.lower()
         b_lower = entity_b.lower()
 
-        works_verbs = ['works at', 'works for', 'employed by', 'arbeitet bei', 'arbeitet für',
-                       'angestellt bei', 'joined', 'led by', 'geführt von']
+        works_verbs = ['works at', 'works for', 'employed by', 'joined', 'led by']
         for verb in works_verbs:
             if verb in lower_text:
                 if a_lower in lower_text.split(verb)[0] if verb in lower_text else False:
                     return "works_at"
 
-        located_verbs = ['located in', 'based in', 'situated in', 'befindet sich in', 'hat seinen sitz in']
+        located_verbs = ['located in', 'based in', 'situated in']
         for verb in located_verbs:
             if verb in lower_text:
                 return "located_in"
 
-        created_verbs = ['created', 'developed', 'built', 'founded', 'gründete', 'entwickelte',
-                         'erfand', 'implementierte']
+        created_verbs = ['created', 'developed', 'built', 'founded', 'implemented']
         for verb in created_verbs:
             if verb in lower_text:
                 return "created"
@@ -324,11 +317,11 @@ class EntropyGate:
             return "weakly_related"
 
     def _ensure_entity(self, name: str) -> Optional[str]:
-        """Legt eine Entity an, falls sie noch nicht existiert. Gibt die ID zurück."""
+        """Create an entity if it does not exist. Returns the entity ID."""
         name_escaped = self._escape_surrealql(name)
         entity_type = infer_entity_type(name, self.embedding_service)
         
-        # Prüfen ob Entity bereits existiert
+        # 1. Exact name match (fastest path)
         check_sql = f"SELECT id FROM entity WHERE name = '{name_escaped}' LIMIT 1;"
         check_result = self._query_surreal(check_sql)
         if check_result and len(check_result) > 1:
@@ -336,25 +329,88 @@ class EntropyGate:
             if existing and len(existing) > 0:
                 return existing[0].get("id")
         
-        # Neue Entity anlegen
-        create_sql = f"""
-        CREATE entity SET 
-            name = '{name_escaped}',
-            type = '{entity_type}';
-        """
+        # 2. Embedding similarity (via SurrealDB Vector Index)
+        similar = self._find_similar_entity(name, threshold=0.85)
+        if similar:
+            return similar
+        
+        # 3. Create new entity with embedding
+        try:
+            embedding = self.embedding_service.embed_for_storage(name)
+            embedding_str = "[" + ",".join(str(v) for v in embedding) + "]"
+            create_sql = f"""
+            CREATE entity SET 
+                name = '{name_escaped}',
+                type = '{entity_type}',
+                embedding = {embedding_str};
+            """
+        except Exception:
+            # If embedding fails, create entity without embedding
+            create_sql = f"""
+            CREATE entity SET 
+                name = '{name_escaped}',
+                type = '{entity_type}';
+            """
+        
         result = self._query_surreal(create_sql)
         if result and len(result) > 1:
             entity_result = result[1].get("result", [])
             if entity_result and len(entity_result) > 0:
                 return entity_result[0].get("id")
         return None
+    
+    def _find_similar_entity(self, name: str, threshold: float = 0.85) -> Optional[str]:
+        """Find similar entity using SurrealDB vector similarity search."""
+        try:
+            emb = self.embedding_service.embed_for_storage(name)
+            emb_str = "[" + ",".join(str(v) for v in emb) + "]"
+            sql = f"""
+            SELECT id, name, type,
+                vector::similarity::cosine(embedding, {emb_str}) AS sim
+            FROM entity
+            WHERE embedding IS NOT NULL
+              AND vector::similarity::cosine(embedding, {emb_str}) > {threshold}
+            ORDER BY sim DESC
+            LIMIT 1;
+            """
+            result = self._query_surreal(sql)
+            if result and len(result) > 1:
+                entities = result[1].get("result", [])
+                if entities and len(entities) > 0:
+                    return entities[0].get("id")
+        except Exception as e:
+            # If embedding fails, skip similarity search
+            pass
+        return None
 
     def _extract_to_kg(self, text: str, event_id: str, debug: bool = False):
         """
-        Extrahiert Entities und semantische Beziehungen in den Knowledge Graph.
-        Nutzt Embedding-Similarity für dynamische Konfidenz statt fixer Co-Occurrence.
+        Extract entities and semantic relationships to the Knowledge Graph.
+        Uses SVO extraction as primary method, with co-occurrence as fallback.
         """
-        candidates = self._extract_candidate_entities(text)
+        # First, try SVO extraction if spaCy is available
+        try:
+            from src.extraction.entity_utils import extract_triples, extract_entities_with_spacy
+            svo_triples = extract_triples(text)
+            spacy_entities = extract_entities_with_spacy(text)
+            
+            # Extract entities from SVO triples if any
+            svo_entities = set()
+            for triple in svo_triples:
+                svo_entities.add(triple["subject"])
+                svo_entities.add(triple["object"])
+            
+            # Combine entities from SVO and spaCy NER
+            all_candidates = set()
+            for entity in spacy_entities:
+                all_candidates.add(entity["name"])
+            all_candidates.update(svo_entities)
+            
+            candidates = list(all_candidates)
+        except ImportError:
+            # Fall back to original method if spaCy is not available
+            candidates = self._extract_candidate_entities(text)
+        
         if not candidates:
             if debug:
                 print(f"  [KG] No candidate entities found in text")
@@ -377,28 +433,89 @@ class EntropyGate:
                 if debug:
                     print(f"  [KG] Entity: {name} -> {eid}")
 
+        # Process SVO triples if spaCy is available
+        try:
+            from src.extraction.entity_utils import extract_triples
+            svo_triples = extract_triples(text)
+            
+            # Create facts from SVO triples
+            for triple in svo_triples:
+                subject = triple["subject"]
+                predicate = triple["predicate"]
+                obj = triple["object"]
+                confidence = triple["confidence"]
+                
+                # Find corresponding entity IDs
+                subject_idx = None
+                obj_idx = None
+                
+                for i, name in enumerate(entity_names):
+                    if name.lower() == subject.lower():
+                        subject_idx = i
+                    if name.lower() == obj.lower():
+                        obj_idx = i
+                
+                if subject_idx is not None and obj_idx is not None and confidence >= 0.3:
+                    try:
+                        relate_sql = f"""
+                        RELATE {entity_ids[subject_idx]}->fact->{entity_ids[obj_idx]} 
+                        SET predicate = '{predicate}',
+                            source_event = {event_id},
+                            confidence = {confidence:.4f};
+                        """
+                        relate_result = self._query_surreal(relate_sql)
+                        if relate_result and len(relate_result) > 1 and relate_result[1].get("status") == "OK":
+                            facts_created += 1
+                            if debug:
+                                print(f"  [KG] SVO Fact: {subject} -[{predicate} ({confidence:.2f})]-> {obj}")
+                    except Exception as e:
+                        if debug:
+                            print(f"  [KG] Error creating SVO fact: {e}")
+        except ImportError:
+            # If spaCy is not available, continue with original co-occurrence method
+            pass
+
+        # Fall back to co-occurrence method for any remaining entity pairs
         if len(entity_ids) >= 2:
             for i in range(len(entity_ids)):
                 for j in range(i + 1, len(entity_ids)):
+                    # Check if this pair already has a fact from SVO extraction
+                    has_svo_fact = False
                     try:
-                        predicate, confidence = self._compute_relation_confidence(
-                            text, entity_names[i], entity_names[j]
-                        )
-                        if confidence >= 0.3:
-                            relate_sql = f"""
-                            RELATE {entity_ids[i]}->fact->{entity_ids[j]} 
-                            SET predicate = '{predicate}',
-                                source_event = {event_id},
-                                confidence = {confidence:.4f};
-                            """
-                            relate_result = self._query_surreal(relate_sql)
-                            if relate_result and len(relate_result) > 1 and relate_result[1].get("status") == "OK":
-                                facts_created += 1
-                                if debug:
-                                    print(f"  [KG] Fact: {entity_names[i]} -[{predicate} ({confidence:.2f})]-> {entity_names[j]}")
-                    except Exception as e:
-                        if debug:
-                            print(f"  [KG] Error creating fact: {e}")
+                        from src.extraction.entity_utils import extract_triples
+                        svo_triples = extract_triples(text)
+                        for triple in svo_triples:
+                            subject = triple["subject"]
+                            obj = triple["object"]
+                            
+                            if (entity_names[i].lower() == subject.lower() and entity_names[j].lower() == obj.lower()) or \
+                               (entity_names[j].lower() == subject.lower() and entity_names[i].lower() == obj.lower()):
+                                has_svo_fact = True
+                                break
+                    except ImportError:
+                        # If spaCy not available, process all pairs
+                        pass
+                    
+                    if not has_svo_fact:
+                        try:
+                            predicate, confidence = self._compute_relation_confidence(
+                                text, entity_names[i], entity_names[j]
+                            )
+                            if confidence >= 0.3:
+                                relate_sql = f"""
+                                RELATE {entity_ids[i]}->fact->{entity_ids[j]} 
+                                SET predicate = '{predicate}',
+                                    source_event = {event_id},
+                                    confidence = {confidence:.4f};
+                                """
+                                relate_result = self._query_surreal(relate_sql)
+                                if relate_result and len(relate_result) > 1 and relate_result[1].get("status") == "OK":
+                                    facts_created += 1
+                                    if debug:
+                                        print(f"  [KG] Co-occurrence Fact: {entity_names[i]} -[{predicate} ({confidence:.2f})]-> {entity_names[j]}")
+                        except Exception as e:
+                            if debug:
+                                print(f"  [KG] Error creating co-occurrence fact: {e}")
 
         for eid in entity_ids:
             try:
@@ -415,7 +532,7 @@ class EntropyGate:
                     print(f"  [KG] Error creating mention fact: {e}")
 
         return {"entities_created": entities_created, "facts_created": facts_created}
-
+    
     def ingest(self, text: str, source: str = "unknown", debug: bool = False) -> Optional[str]:
         """
         Hauptfunktion: Ingest eines Textes in das Memory System
@@ -458,6 +575,7 @@ class EntropyGate:
 
         # 1. IMMER in Raw Event Log speichern (ohne Gate!)
         embedding = self.embedding_service.embed_for_storage(text)
+        embedding_str = "[" + ",".join(str(v) for v in embedding) + "]"
         text_escaped = self._escape_surrealql(text)
         source_escaped = self._escape_surrealql(source)
         sql = f"""
@@ -465,7 +583,7 @@ class EntropyGate:
             content = '{text_escaped}',
             content_hash = '{content_hash}',
             source = '{source_escaped}',
-            embedding = {embedding};
+            embedding = {embedding_str};
         """
         event_id = None
         result = None
