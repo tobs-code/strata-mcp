@@ -579,6 +579,13 @@ async def memory_store_endpoint(request_data: dict):
             "source": source,
             "message": "content must not be empty or whitespace-only",
         }
+    if len(content) > MAX_CONTENT_LENGTH:
+        return {
+            "event_id": None,
+            "status": "error",
+            "source": source,
+            "message": f"content exceeds maximum length of {MAX_CONTENT_LENGTH} characters (got {len(content)})",
+        }
 
     import hashlib
     content_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()
@@ -704,6 +711,8 @@ async def memory_query_endpoint(request_data: dict):
     }
 
 
+MAX_CONTENT_LENGTH = 100_000
+
 @mcp.tool()
 async def memory_store(
     content: str, source: str = "user_input", metadata: Optional[Dict[str, Any]] = None
@@ -715,6 +724,13 @@ async def memory_store(
             "status": "error",
             "source": source,
             "message": "content must not be empty or whitespace-only",
+        }
+    if len(content) > MAX_CONTENT_LENGTH:
+        return {
+            "event_id": None,
+            "status": "error",
+            "source": source,
+            "message": f"content exceeds maximum length of {MAX_CONTENT_LENGTH} characters (got {len(content)})",
         }
 
     from src.extraction.entropy_gate import EntropyGate

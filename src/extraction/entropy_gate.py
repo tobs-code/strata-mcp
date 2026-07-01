@@ -344,6 +344,9 @@ class EntropyGate:
         if not text or not text.strip():
             print(f"Error: Empty or whitespace-only content rejected (source={source})")
             return None
+        if len(text) > 100_000:
+            print(f"Error: Content exceeds maximum storage length ({len(text)} > 100000) (source={source})")
+            return None
 
         # 0. Dedup: Prüfen ob exakt gleicher Content bereits existiert
         content_hash = self._hash_content(text)
