@@ -340,13 +340,38 @@ class EntropyGate:
         2. Entropy Gate entscheiden lassen ob KG-Extraction
         3. Bei 'extract': Entities und Facts in den Knowledge Graph extrahieren
         """
-        
+
+        if not text or not text.strip():
+            print(f"Error: Empty or whitespace-only content rejected (source={source})")
+            return None
+
+        # 0. Dedup: Prüfen ob exakt gleicher Content bereits existiert
+        content_hash = self._hash_content(text)
+        dedup_sql = f"""
+        SELECT id FROM event 
+        WHERE content_hash = '{content_hash}'
+          AND (forgotten IS NONE OR forgotten = false)
+        LIMIT 1;
+        """
+        dedup_result = self._query_surreal(dedup_sql)
+        if dedup_result and len(dedup_result) > 1:
+            existing = dedup_result[1].get("result", [])
+            if existing and len(existing) > 0:
+                event_id = existing[0].get("id")
+                if debug:
+                    print(f"  [Dedup] Found existing event {event_id} for identical content")
+                gate_result = self.should_extract(text)
+                if gate_result["decision"] == "extract" and event_id:
+                    kg_result = self._extract_to_kg(text, event_id, debug)
+                return event_id
+
         # 1. IMMER in Raw Event Log speichern (ohne Gate!)
         embedding = self.embedding_service.embed_for_storage(text)
         text_escaped = text.replace("'", "\\'")
         sql = f"""
         CREATE event SET 
             content = '{text_escaped}',
+            content_hash = '{content_hash}',
             source = '{source}',
             embedding = {embedding};
         """

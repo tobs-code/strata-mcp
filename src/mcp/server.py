@@ -572,6 +572,30 @@ async def memory_store_endpoint(request_data: dict):
     source = request_data.get("source", "user_input")
     metadata = request_data.get("metadata", None)
 
+    if not content or not content.strip():
+        return {
+            "event_id": None,
+            "status": "error",
+            "source": source,
+            "message": "content must not be empty or whitespace-only",
+        }
+
+    import hashlib
+    content_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()
+
+    dedup_sql = f"""
+    SELECT id FROM event 
+    WHERE content_hash = '{content_hash}'
+      AND (forgotten IS NONE OR forgotten = false)
+    LIMIT 1;
+    """
+    dedup_result = await _query_surreal(dedup_sql)
+    dedup_parsed = _extract_result(dedup_result)
+    if dedup_parsed and isinstance(dedup_parsed, list) and len(dedup_parsed) > 0:
+        existing_id = dedup_parsed[0].get("id") if isinstance(dedup_parsed[0], dict) else None
+        if existing_id:
+            return {"event_id": existing_id, "status": "dedup", "source": source}
+
     embedding_service = get_embedding_service()
     embedding_list = await asyncio.to_thread(
         embedding_service.embed_for_storage, content
@@ -584,12 +608,14 @@ async def memory_store_endpoint(request_data: dict):
         meta_json = json.dumps(metadata)
         sql = (
             f"CREATE event SET content = '{content_escaped}', "
+            f"content_hash = '{content_hash}', "
             f"source = '{source_escaped}', embedding = {embedding_storage}, "
             f"metadata = {meta_json};"
         )
     else:
         sql = (
             f"CREATE event SET content = '{content_escaped}', "
+            f"content_hash = '{content_hash}', "
             f"source = '{source_escaped}', embedding = {embedding_storage};"
         )
 
@@ -683,6 +709,14 @@ async def memory_store(
     content: str, source: str = "user_input", metadata: Optional[Dict[str, Any]] = None
 ) -> dict:
     """Stores a new event in the raw event log. Runs through entropy gate which logs decisions to gate_log for later calibration."""
+    if not content or not content.strip():
+        return {
+            "event_id": None,
+            "status": "error",
+            "source": source,
+            "message": "content must not be empty or whitespace-only",
+        }
+
     from src.extraction.entropy_gate import EntropyGate
 
     gate = EntropyGate()
