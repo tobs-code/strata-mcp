@@ -15,7 +15,7 @@ from mcp.server.fastmcp import FastMCP
 from src.extraction.entropy_gate import escape_surrealql
 
 from .common_logic import _execute_query, _get_or_create_entity, _store_content
-from .core import _clean_output, _extract_result, _query_surreal, mcp
+from .core import _clean_output, _embed_query, _extract_result, _query_surreal, mcp
 
 
 @mcp.tool()
@@ -106,31 +106,29 @@ async def memory_update(subject: str, predicate: str, new_value: str) -> dict:
 @mcp.tool()
 async def memory_stats(random_string: str = "") -> dict:
     """Returns statistics about the memory system."""
+    forgotten_filter = "(forgotten = false OR forgotten IS NONE)"
+
     # Count events
-    event_count_result = await _query_surreal("SELECT count() FROM event GROUP ALL;")
+    event_count_result = await _query_surreal(f"SELECT count() FROM event WHERE {forgotten_filter} GROUP ALL;")
     event_counts = _extract_result(event_count_result, 1)
     event_count = event_counts[0].get("count", 0) if event_counts else 0
 
     # Count entities
-    entity_count_result = await _query_surreal("SELECT count() FROM entity GROUP ALL;")
+    entity_count_result = await _query_surreal(f"SELECT count() FROM entity WHERE {forgotten_filter} GROUP ALL;")
     entity_counts = _extract_result(entity_count_result, 1)
     entity_count = entity_counts[0].get("count", 0) if entity_counts else 0
 
     # Count facts
-    fact_count_result = await _query_surreal("SELECT count() FROM fact GROUP ALL;")
+    fact_count_result = await _query_surreal("SELECT count() FROM fact WHERE (valid_until IS NONE OR valid_until = NONE) AND (forgotten = false OR forgotten IS NONE) GROUP ALL;")
     fact_counts = _extract_result(fact_count_result, 1)
     fact_count = fact_counts[0].get("count", 0) if fact_counts else 0
 
     # Get oldest and newest event timestamps
-    oldest_result = await _query_surreal(
-        "SELECT timestamp FROM event ORDER BY timestamp ASC LIMIT 1;"
-    )
+    oldest_result = await _query_surreal(f"SELECT timestamp FROM event WHERE {forgotten_filter} ORDER BY timestamp ASC LIMIT 1;")
     oldest_events = _extract_result(oldest_result, 1)
     oldest_event = oldest_events[0].get("timestamp") if oldest_events else None
 
-    newest_result = await _query_surreal(
-        "SELECT timestamp FROM event ORDER BY timestamp DESC LIMIT 1;"
-    )
+    newest_result = await _query_surreal(f"SELECT timestamp FROM event WHERE {forgotten_filter} ORDER BY timestamp DESC LIMIT 1;")
     newest_events = _extract_result(newest_result, 1)
     newest_event = newest_events[0].get("timestamp") if newest_events else None
 
@@ -205,76 +203,58 @@ async def event_log_search(
     LIMIT {limit * 4};
     """
 
-    # 2) Vector search - skipped due to syntax issues with SurrealDB 3
+    # Start FTX query immediately (overlap with embedding computation)
+    ftx_task = asyncio.create_task(_query_surreal(ftx_sql))
 
-    # 3) Temporal search (recent events that might be relevant)
-    temporal_sql = f"""
-    SELECT id, content, timestamp, source, metadata, 'temporal' AS search_type
-    FROM event
-    WHERE {forgotten_filter}
-      {time_filter}
-    ORDER BY timestamp DESC
-    LIMIT {limit};
-    """
+    # 2) Vector search — compute embedding while FTX runs
+    try:
+        query_vector = await _embed_query(query)
+        query_vector_str = "[" + ", ".join(map(str, query_vector)) + "]"
 
-    # Execute searches (only FTX and temporal since vector search is problematic)
-    ftx_result, temporal_result = await asyncio.gather(
-        _query_surreal(ftx_sql), _query_surreal(temporal_sql)
-    )
+        vec_sql = f"""
+        SELECT id, content, timestamp, source, metadata,
+               vector::similarity::cosine(embedding, {query_vector_str}) AS vec_score,
+               'vector' AS search_type
+        FROM event
+        WHERE embedding IS NOT NONE
+          AND {forgotten_filter}
+          AND array::len(embedding) = {len(query_vector)}
+          {time_filter}
+        ORDER BY vec_score DESC
+        LIMIT {limit * 4};
+        """
+        vec_result = await _query_surreal(vec_sql)
+        ftx_result = await ftx_task
+    except Exception:
+        ftx_result = await ftx_task
+        vec_result = None
 
     ftx_events = _extract_result(ftx_result, 1) or []
-    temporal_events = _extract_result(temporal_result, 1) or []
 
-    # RRF fusion (Reciprocal Rank Fusion) - simplified without vector results
-    k = 60  # Smoothing constant
-    fused_scores = {}
+    # RRF fusion
+    k = 60
+    fused = {}
+    for rank, ev in enumerate(ftx_events):
+        eid = ev.get("id")
+        if eid:
+            fused[eid] = {"rrf": 1.0 / (k + rank), "event": ev}
 
-    # Score FTX results
-    for rank, event in enumerate(ftx_events):
-        event_id = event.get("id")
-        if event_id:
-            fused_scores[event_id] = {
-                "event": event,
-                "rrf_score": 1.0 / (k + rank),
-                "source": "lexical",
-            }
-
-    # Score temporal results
-    for rank, event in enumerate(temporal_events):
-        event_id = event.get("id")
-        if event_id:
-            if event_id in fused_scores:
-                fused_scores[event_id]["rrf_score"] += 1.0 / (k + rank)
-                fused_scores[event_id]["source"] = "lexical+temporal"
+    if vec_result is not None:
+        vec_events = _extract_result(vec_result, 1) or []
+        for rank, ev in enumerate(vec_events):
+            eid = ev.get("id")
+            if eid in fused:
+                fused[eid]["rrf"] += 1.0 / (k + rank)
             else:
-                fused_scores[event_id] = {
-                    "event": event,
-                    "rrf_score": 1.0 / (k + rank),
-                    "source": "temporal",
-                }
+                fused[eid] = {"rrf": 1.0 / (k + rank), "event": ev}
 
-    # Sort by RRF score and return top results
-    sorted_items = sorted(
-        fused_scores.items(), key=lambda x: x[1]["rrf_score"], reverse=True
-    )
-    top_items = sorted_items[:limit]
+    sorted_events = [
+        item["event"]
+        for item in sorted(fused.values(), key=lambda x: x["rrf"], reverse=True)[:limit]
+    ]
+    events = _clean_output(sorted_events)
 
-    # Prepare final results
-    final_events = []
-    for event_id, data in top_items:
-        event = data["event"]
-        event["search_type"] = data["source"]
-        final_events.append(event)
-
-    return {
-        "events": _clean_output(final_events),
-        "count": len(final_events),
-        "sources": {
-            "lexical": len(ftx_events),
-            "vector": 0,  # No vector search performed due to syntax issues
-            "temporal": len(temporal_events),
-        },
-    }
+    return {"events": events, "count": len(events)}
 
 
 @mcp.tool()
@@ -316,10 +296,16 @@ async def kg_query(
                 f" AND (valid_until >= '{time_escaped}' OR valid_until = NONE)"
             )
 
+    # Only show active facts (not invalidated)
+    valid_filter = "WHERE (valid_until IS NONE OR valid_until > time::now())"
+    if subject_clause:
+        # Replace initial WHERE with AND since we already have valid_filter
+        subject_clause = subject_clause.replace("WHERE", "AND", 1) if "WHERE" in subject_clause else subject_clause
+
     sql = f"""
     SELECT id, in, out, predicate, confidence, valid_from, valid_until
     FROM fact
-    {subject_clause}
+    {valid_filter} {subject_clause}
     ORDER BY confidence DESC
     LIMIT 100;
     """
@@ -384,74 +370,76 @@ async def kg_query(
 
 
 @mcp.tool()
-async def semantic_search(query: str, top_k: int = 10) -> dict:
-    """Pure vector search without knowledge graph."""
+async def semantic_search(query: str, top_k: int = 5) -> dict:
+    """Pure vector search without KG. Filters out highly repetitive/noise content."""
     if not query.strip():
         return {"events": [], "count": 0, "message": "Query cannot be empty"}
 
     from src.extraction.embedding_service import get_embedding_service
 
-    service = get_embedding_service()
-    query_vector = service.embed_for_query(query)
-    vector_str = "[" + ",".join(str(v) for v in query_vector) + "]"
+    embedding_service = get_embedding_service()
+    query_vector = await _embed_query(query)
 
-    # Using a simpler approach compatible with SurrealDB 3 due to syntax issues
+    query_vector_str = "[" + ", ".join(map(str, query_vector)) + "]"
+
+    # Fetch extra candidates to allow post-filtering
+    fetch_k = min(top_k * 4, 100)
     sql = f"""
-    SELECT id, content, timestamp, source, metadata
+    SELECT id, content, vector::similarity::cosine(embedding, {query_vector_str}) AS score
     FROM event
-    WHERE embedding != NONE
+    WHERE embedding IS NOT NONE
       AND (forgotten IS NONE OR forgotten = false)
-    LIMIT {top_k};
+      AND array::len(embedding) = {len(query_vector)}
+    ORDER BY score DESC
+    LIMIT {fetch_k};
     """
-
     result = await _query_surreal(sql)
-    events = _extract_result(result, 1)
+    raw_events = _extract_result(result, 1)
 
-    # Filter out potentially repetitive content
-    filtered_events = []
-    seen_content = set()
+    # Post-filter: penalize highly repetitive content by re-weighting its score
+    scored = []
+    for ev in raw_events:
+        content = ev.get("content", "")
+        score = ev.get("score", 0)
+        if not isinstance(score, (int, float)):
+            score = 0.0
+        if _is_highly_repetitive(content):
+            # Heavily penalise but don't remove entirely — allows real matches to dominate
+            score = score * 0.02
+        scored.append((score, ev))
 
-    for event in events:
-        content = event.get("content", "").strip().lower()
-        # Skip if content is too short or too similar to already seen content
-        if len(content) < 10:
-            continue
+    # Re-sort and take top_k
+    scored.sort(key=lambda x: x[0], reverse=True)
+    events = [_clean_output(ev) for _, ev in scored[:top_k]]
 
-        # Use a simple similarity check to filter duplicates
-        is_duplicate = False
-        for seen in seen_content:
-            if _simple_similarity(content, seen) > 0.8:  # 80% similarity threshold
-                is_duplicate = True
-                break
-
-        if not is_duplicate:
-            seen_content.add(content)
-            filtered_events.append(event)
-
-    return {
-        "events": _clean_output(filtered_events),
-        "count": len(filtered_events),
-        "original_count": len(events),
-    }
+    return {"events": events, "count": len(events)}
 
 
-def _simple_similarity(s1: str, s2: str) -> float:
-    """Simple similarity measure based on common words."""
-    if not s1 or not s2:
+def _character_diversity(text: str) -> float:
+    """Anteil unique chars: len(set(text)) / len(text). < 0.15 = repetitive noise."""
+    if not text:
         return 0.0
+    unique = len(set(text.lower()))
+    return unique / len(text)
 
-    words1 = set(s1.split())
-    words2 = set(s2.split())
 
-    if not words1 and not words2:
-        return 1.0
-    if not words1 or not words2:
-        return 0.0
-
-    intersection = words1.intersection(words2)
-    union = words1.union(words2)
-
-    return len(intersection) / len(union)
+def _is_highly_repetitive(text: str) -> bool:
+    """Erkennt repetitive/noise content wie 'test test test test test' or 'ab ab ab ab ab'.
+    Prüft character_diversity (< 0.20) und zusätzlich die Wort-Wiederholungsrate."""
+    if not text or len(text) < 5:
+        return False
+    div = _character_diversity(text)
+    # Character-Diversity: "test test test test test" -> 4/24 = 0.167 < 0.20 ✓
+    if div < 0.20:
+        return True
+    # Word-Repetition: zählt unique words / total words
+    words = text.lower().split()
+    if len(words) >= 3:
+        unique_words = len(set(words))
+        word_ratio = unique_words / len(words)
+        if word_ratio < 0.3:
+            return True
+    return False
 
 
 @mcp.tool()

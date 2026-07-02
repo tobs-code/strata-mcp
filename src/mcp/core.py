@@ -97,6 +97,17 @@ def _store_embedding_cache(query: str, vector: List[float]):
     _embedding_cache[query] = vector
 
 
+async def _embed_query(query: str) -> List[float]:
+    cached = _get_cached_embedding(query)
+    if cached is not None:
+        return cached
+    from src.extraction.embedding_service import get_embedding_service
+    service = get_embedding_service()
+    vector = await asyncio.to_thread(service.embed_for_query, query)
+    _store_embedding_cache(query, vector)
+    return vector
+
+
 def _jittered_backoff(level: int) -> float:
     # Full jitter: uniform random in [0, min(cap, base * 2^level)]
     base = 0.5

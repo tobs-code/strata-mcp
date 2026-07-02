@@ -419,19 +419,41 @@ class RetrievalExecutor:
         }
     
     async def _execute_hybrid_fallback(self, query: str, budget_tracker: BudgetTracker, **kwargs) -> Dict[str, Any]:
-        """Execute hybrid fallback strategy — search everything available."""
-        budget_tracker.increment_db_calls(3)
+        """Execute hybrid fallback strategy — search everything available including temporal fallback."""
+        budget_tracker.increment_db_calls(4)
         budget_tracker.increment_tokens(len(query) // 4)
         
-        ftx_events, kg_facts, entities = await asyncio.gather(
+        ftx_events, temporal_events, kg_facts, entities = await asyncio.gather(
             self._search_events_ftx(query, 5),
+            self._search_events_temporal(query, 5),
             self._search_kg_by_text(query),
             self._search_entities_by_name(query)
         )
         
+        # RRF fusion for events (FTX + temporal)
+        k = 60
+        seen_ids = set()
+        fused = []
+        for rank, ev in enumerate(ftx_events):
+            eid = ev.get("id")
+            if eid and eid not in seen_ids:
+                seen_ids.add(eid)
+                ev["_rrf_score"] = 1.0 / (k + rank)
+                fused.append(ev)
+        for rank, ev in enumerate(temporal_events):
+            eid = ev.get("id")
+            if eid and eid not in seen_ids:
+                seen_ids.add(eid)
+                ev["_rrf_score"] = 1.0 / (k + len(ftx_events) + rank)
+                fused.append(ev)
+        
+        fused.sort(key=lambda x: x.get("_rrf_score", 0), reverse=True)
+        for ev in fused:
+            ev.pop("_rrf_score", None)
+        
         return {
             "strategy": "hybrid_fallback",
-            "events": _clean_output(ftx_events),
+            "events": _clean_output(fused[:10]),
             "entities": _clean_output(entities),
             "facts": _clean_output(kg_facts),
             "query": query
