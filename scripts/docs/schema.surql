@@ -15,7 +15,7 @@ DEFINE TABLE event SCHEMALESS;
 DEFINE FIELD timestamp ON event TYPE datetime DEFAULT time::now();
 DEFINE FIELD source ON event TYPE string;  -- z.B. "user_input", "system_event", "api_response"
 DEFINE FIELD content ON event TYPE string; -- Der rohe Inhalt
-DEFINE FIELD embedding ON event TYPE none | array<float>;
+DEFINE FIELD embedding ON event TYPE option<vector(f32, 384)>;
 DEFINE FIELD metadata ON event TYPE option<object>;
 DEFINE FIELD forgotten ON event TYPE bool DEFAULT false;
 DEFINE FIELD forget_reason ON event TYPE option<string>;
@@ -37,7 +37,7 @@ DEFINE INDEX event_embedding_vec ON event FIELDS embedding HNSW DIMENSION 384 DI
 DEFINE TABLE entity SCHEMAFULL;
 DEFINE FIELD name ON entity TYPE string;
 DEFINE FIELD type ON entity TYPE string; -- z.B. "person", "organization", "concept"
-DEFINE FIELD embedding ON entity TYPE none | array<float>; -- For vector similarity search
+DEFINE FIELD embedding ON entity TYPE option<array>; -- For vector similarity search (array of f32)
 DEFINE FIELD metadata ON entity TYPE option<object>;
 DEFINE FIELD forgotten ON entity TYPE bool DEFAULT false;
 DEFINE FIELD forget_reason ON entity TYPE option<string>;

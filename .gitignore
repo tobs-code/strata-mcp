@@ -34,3 +34,7 @@ Thumbs.db
 /maintenance/
 /planner/
 /router/
+
+# Root Rust files (on hold)
+Cargo.toml
+Cargo.lock

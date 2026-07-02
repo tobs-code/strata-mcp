@@ -9,7 +9,7 @@ import threading
 import time
 from datetime import datetime, timedelta
 import logging
-from ..cost_awareness import cost_tracker
+from .cost_awareness import cost_tracker
 
 
 class QueryType(Enum):

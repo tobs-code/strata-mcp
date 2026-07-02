@@ -1,0 +1,190 @@
+# -*- coding: utf-8 -*-
+"""
+HTTP Endpoints implementation
+"""
+
+import sys
+import os
+from typing import Any, Dict, Optional
+from fastapi import Query
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
+
+from .core import app
+from .common_logic import _store_content, _execute_query
+from src.extraction.classifier import QueryClassifier
+from src.planner.executor import PlanExecutor
+from src.maintenance.conservative_maintainer import ConservativeMaintainer
+from src.router.policy import RoutingPolicy
+
+
+@app.get("/classify")
+async def classify_endpoint(
+    query: str = Query(..., description="The query to classify"),
+):
+    """Classify a query according to type and confidence"""
+    classifier = QueryClassifier()
+    query_type, confidence = classifier.classify(query)
+    return {"query": query, "type": query_type, "confidence": confidence}
+
+
+@app.get("/route")
+async def route_endpoint(query: str = Query(..., description="The query to route")):
+    """Route a query according to the routing policy"""
+    classifier = QueryClassifier()
+    policy = RoutingPolicy()
+
+    query_type, confidence = classifier.classify(query)
+    strategy = policy.get_strategy(query_type, confidence)
+
+    return {
+        "query": query,
+        "classification": {"type": query_type, "confidence": confidence},
+        "routing_strategy": strategy,
+    }
+
+
+@app.post("/plan_and_execute")
+async def plan_and_execute_endpoint(request_data: dict):
+    """Create and execute a plan for the given query"""
+    query = request_data.get("query", "")
+    classifier = QueryClassifier()
+    policy = RoutingPolicy()
+    executor = PlanExecutor()
+
+    # Classify and route the query
+    query_type, confidence = classifier.classify(query)
+    strategy_info = policy.get_strategy(query_type, confidence)
+
+    # Create a plan
+    plan = {
+        "query": query,
+        "strategy": strategy_info["strategy"],
+        "classification": {"type": query_type, "confidence": confidence},
+    }
+
+    # Execute the plan (using run_in_executor to avoid blocking)
+    import asyncio
+    loop = asyncio.get_event_loop()
+    result = await loop.run_in_executor(None, executor.execute_plan, plan)
+
+    return result
+
+
+@app.post("/maintain")
+async def maintain_endpoint():
+    """Perform maintenance operations"""
+    maintainer = ConservativeMaintainer()
+    result = await maintainer.perform_maintenance()
+
+    return result
+
+
+@app.get("/health")
+async def health_check():
+    """Health check endpoint"""
+    return {
+        "status": "healthy",
+        "components": {
+            "classifier": "ready",
+            "router": "ready",
+            "planner": "ready",
+            "executor": "ready",
+            "maintainer": "ready",
+        },
+    }
+
+
+# HTTP Endpoints for MCP tools
+@app.post("/memory/store")
+async def memory_store_endpoint(request_data: dict):
+    """Stores a new event in the raw event log. Runs through entropy gate. NOTE: Only English content should be stored — German or other languages produce noisy entity extraction."""
+    return await _store_content(
+        request_data.get("content", ""),
+        request_data.get("source", "user_input"),
+    )
+
+
+@app.post("/memory/query")
+async def memory_query_endpoint(request_data: dict):
+    """Routes a natural language query through the full pipeline: classify → plan → retrieve."""
+    return await _execute_query(
+        request_data.get("query", ""),
+        request_data.get("cost_budget", "auto"),
+    )
+
+
+@app.get("/memory/event_log_search")
+async def event_log_search_endpoint(
+    query: str = Query(..., description="Search query"),
+    since: Optional[str] = Query(None, description="Start date"),
+    until: Optional[str] = Query(None, description="End date"),
+    limit: int = Query(10, description="Result limit"),
+):
+    """Direct timeline query without router: hybrid search (BM25 + vector + RRF)."""
+    # Import the tool function directly to reuse the logic
+    from .tools import event_log_search
+    return await event_log_search(query, limit, since, until)
+
+
+@app.get("/kg/query")
+async def kg_query_endpoint(
+    subject: Optional[str] = Query(None, description="Subject to query"),
+    predicate: Optional[str] = Query(None, description="Predicate to query"),
+    at_time: Optional[str] = Query(None, description="Time to query at")
+):
+    """Direct graph traversal: query facts by subject/predicate/time."""
+    # Import the tool function directly to reuse the logic
+    from .tools import kg_query
+    return await kg_query(subject, predicate, at_time)
+
+
+@app.get("/semantic/search")
+async def semantic_search_endpoint(
+    query: str = Query(..., description="Search query"),
+    top_k: int = Query(10, description="Top-k results")
+):
+    """Pure vector search without KG. Filters out highly repetitive/noise content."""
+    # Import the tool function directly to reuse the logic
+    from .tools import semantic_search
+    return await semantic_search(query, top_k)
+
+
+@app.get("/memory/stats")
+async def memory_stats_endpoint(random_string: str = ""):
+    """Returns statistics about the memory system."""
+    # Import the tool function directly to reuse the logic
+    from .tools import memory_stats
+    return await memory_stats(random_string)
+
+
+@app.get("/explain/routing")
+async def explain_routing_endpoint(query: str = Query(..., description="Query to explain routing for")):
+    """Explains why the router chose a specific strategy for a query."""
+    # Import the tool function directly to reuse the logic
+    from .tools import explain_routing
+    return await explain_routing(query)
+
+
+@app.post("/memory/forget")
+async def memory_forget_endpoint(request_data: dict):
+    """Forgets a memory by event_id or entity."""
+    # Import the tool function directly to reuse the logic
+    from .tools import memory_forget
+    return await memory_forget(
+        entity=request_data.get("entity"),
+        event_id=request_data.get("event_id"),
+        reason=request_data.get("reason", "")
+    )
+
+
+@app.post("/memory/consolidate")
+async def memory_consolidate_endpoint(request_data: dict):
+    """Consolidates memory entries."""
+    # Import the tool function directly to reuse the logic
+    from .tools import memory_consolidate
+    return await memory_consolidate(
+        entity=request_data.get("entity"),
+        scope=request_data.get("scope", "local"),
+        delete_stale=request_data.get("delete_stale", False)
+    )

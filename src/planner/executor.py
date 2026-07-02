@@ -9,9 +9,9 @@ from typing import Dict, List, Any, Optional
 from enum import Enum
 import logging
 
-# Import the cost tracking functionality
+# Fixed import paths to correctly reference modules
 from ..router.policy import QueryType, BudgetLevel
-from ..cost_awareness import cost_tracker
+from ..router.cost_awareness import cost_tracker
 
 
 class RetrievalStrategy(Enum):

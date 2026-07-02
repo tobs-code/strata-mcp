@@ -113,10 +113,10 @@ The server speaks MCP over stdin/stdout. Most MCP clients start the server as a 
   "mcpServers": {
     "STRATA-memory": {
       "command": "python",
-      "args": ["-m", "src.mcp.server"],
-      "cwd": "C:\\Users\\tobs\\.cursor\\workspace\\STRATA",
+      "args": ["-m", "src.mcp.server_modular"],
+      "cwd": "C:\\workspace\\STRATA",
       "env": {
-        "PYTHONPATH": "C:\\Users\\tobs\\.cursor\\workspace\\STRATA"
+        "PYTHONPATH": "C:\\workspace\\STRATA"
       }
     }
   }
@@ -571,7 +571,7 @@ SurrealDB container is not running or port 8000 is blocked:
 ```bash
 docker ps --filter "name=strata-surrealdb"
 # If not running:
-cd sdb && docker-compose up -d
+docker-compose up -d
 ```
 
 ### Embedding model loads extremely slowly

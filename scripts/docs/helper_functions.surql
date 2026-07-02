@@ -46,7 +46,7 @@ DEFINE FUNCTION fn::invalidate_fact($fact_id: record(fact)) {
 
 -- 5. fn::append_event($source, $content, $embedding, $metadata)
 -- Hilfsfunktion zum Append eines neuen Events (garantiert immutable)
-DEFINE FUNCTION fn::append_event($source: string, $content: string, $embedding: none | array<float>, $metadata: option<object>) {
+DEFINE FUNCTION fn::append_event($source: string, $content: string, $embedding: option<vector>, $metadata: option<object>) {
     RETURN CREATE event SET
         source = $source,
         content = $content,

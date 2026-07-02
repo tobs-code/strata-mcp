@@ -8,9 +8,9 @@ from typing import Dict, Tuple, Optional
 import time
 import logging
 
-# Import the enhanced policy and cost tracking
+# Import the enhanced policy and cost tracking with correct relative paths
 from .policy import RoutingPolicy, QueryType, BudgetLevel, OverBudget
-from ..cost_awareness import cost_tracker
+from .cost_awareness import cost_tracker
 
 
 class Router:
