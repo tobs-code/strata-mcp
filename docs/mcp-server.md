@@ -46,7 +46,7 @@ requests>=2.28.0
 numpy>=1.21.0
 fastapi>=0.100.0
 uvicorn>=0.20.0
-surrealdb>=1.0.0
+httpx>=0.24.0
 python-dotenv>=1.0.0
 ```
 
@@ -70,7 +70,6 @@ pip install sentence-transformers scikit-learn mcp[fastmcp]
 ### 1. Start SurrealDB
 
 ```bash
-cd sdb
 docker-compose up -d
 ```
 
@@ -85,7 +84,6 @@ SurrealDB is then reachable at `http://127.0.0.1:8000` with credentials `root` /
 ### 2. Load Schema and Helper Functions
 
 ```bash
-cd ..
 python scripts/load_schema_optimized.py
 ```
 

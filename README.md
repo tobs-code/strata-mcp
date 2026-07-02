@@ -21,10 +21,6 @@ Strata is an agent memory system that intelligently classifies, routes, plans, a
                   │  MCP Server      │  (Python, stdio/HTTP)
                   └──────┬───────────┘
                          │
-                  ┌──────────────────┐
-                  │  MCP Server      │  (Python, stdio/HTTP)
-                  └──────────────────┘
-                         │
                          ▼
         ┌─────────────────────────────┐
         │     SurrealDB Storage       │
@@ -137,7 +133,7 @@ composite = alpha * normalized_text_entropy + beta * embedding_novelty
 - **Text entropy** = Shannon entropy on character level (alphanumeric + whitespace), normalized to `[0, 1]` using a max of ~4.5 bits.
 - **Embedding novelty** = `1 − avg cosine similarity` to the top-5 most similar previously stored embeddings (in-memory index for the current session).
 - **Weights** (default): `alpha = 0.35`, `beta = 0.65`.
-- **Threshold** (default): `0.55`.
+- **Threshold** (adaptive): starts at `0.30` (cold start) and ramps linearly to `0.55` after ~150 events.
 
 **Decision:** `extract` if `composite >= threshold`, otherwise `ignore`.
 
