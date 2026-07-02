@@ -114,6 +114,19 @@ async def memory_query_endpoint(request_data: dict):
     )
 
 
+@app.post("/memory/update")
+async def memory_update_endpoint(request_data: dict):
+    """Updates a fact in the KG via logical invalidation. Old fact gets valid_until, new fact created.
+    If the target entity does not exist yet, it will be created automatically."""
+    # Import the tool function directly to reuse the logic
+    from .tools import memory_update
+    return await memory_update(
+        subject=request_data.get("subject", ""),
+        predicate=request_data.get("predicate", ""), 
+        new_value=request_data.get("new_value", "")
+    )
+
+
 @app.get("/memory/event_log_search")
 async def event_log_search_endpoint(
     query: str = Query(..., description="Search query"),

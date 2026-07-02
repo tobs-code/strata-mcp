@@ -8,10 +8,15 @@ import time
 from typing import Dict, List, Any, Optional
 from enum import Enum
 import logging
+import sys
+import os
 
-# Fixed import paths to correctly reference modules
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
+
 from ..router.policy import QueryType, BudgetLevel
 from ..router.cost_awareness import cost_tracker
+from ..extraction.entropy_gate import escape_surrealql
+from ..mcp.core import _query_surreal, _extract_result, _clean_output
 
 
 class RetrievalStrategy(Enum):
@@ -63,7 +68,7 @@ class RetrievalExecutor:
     """Executes retrieval operations using different strategies"""
     
     def __init__(self):
-        self.db_connection = None  # Will be initialized with actual connection
+        self.db_connection = None
         self.budget_enforcement = True
     
     async def execute_strategy(self, strategy: RetrievalStrategy, query: str, 
@@ -74,13 +79,12 @@ class RetrievalExecutor:
         start_time = time.time()
         success = True
         num_queries = 0
-        relevance_score = 0.5  # Default relevance until actual results are evaluated
+        relevance_score = 0.5
         
         try:
             if budget_tracker.is_over_budget():
                 raise Exception("Over budget")
             
-            # Execute the specific strategy
             if strategy == RetrievalStrategy.EVENT_LOG_FIRST:
                 result = await self._execute_event_log_first(query, budget_tracker, **kwargs)
                 num_queries += 1
@@ -89,13 +93,13 @@ class RetrievalExecutor:
                 num_queries += 1
             elif strategy == RetrievalStrategy.HYBRID_WITH_GRAPH_EXPANSION:
                 result = await self._execute_hybrid_with_graph_expansion(query, budget_tracker, **kwargs)
-                num_queries += 2  # More complex query
+                num_queries += 2
             elif strategy == RetrievalStrategy.COMPOSITE_KG_VECTOR:
                 result = await self._execute_composite_kg_vector(query, budget_tracker, **kwargs)
                 num_queries += 2
             elif strategy == RetrievalStrategy.KNOWLEDGE_GRAPH_WITH_INVALIDATION:
                 result = await self._execute_knowledge_graph_with_invalidation(query, budget_tracker, **kwargs)
-                num_queries += 2  # Includes write operations
+                num_queries += 2
             elif strategy == RetrievalStrategy.HYBRID_BM25_VECTOR_TEMPORAL:
                 result = await self._execute_hybrid_bm25_vector_temporal(query, budget_tracker, **kwargs)
                 num_queries += 2
@@ -105,20 +109,17 @@ class RetrievalExecutor:
             else:
                 raise ValueError(f"Unknown strategy: {strategy}")
             
-            # Calculate relevance based on result quality
             relevance_score = self._calculate_relevance_score(result, query)
             
         except Exception as e:
             success = False
             logging.error(f"Strategy {strategy.value} failed: {e}")
-            result = {"error": str(e), "results": []}
+            result = {"error": str(e), "events": [], "entities": [], "facts": []}
         
         finally:
-            # Record metrics regardless of success/failure
             end_time = time.time()
             latency = end_time - start_time
             
-            # Record the request with actual performance metrics
             cost_tracker.record_request(
                 strategy=strategy.value,
                 latency=latency,
@@ -131,120 +132,308 @@ class RetrievalExecutor:
     
     def _calculate_relevance_score(self, result: Dict[str, Any], query: str) -> float:
         """Calculate a relevance score based on the result quality."""
-        # Simple heuristic for relevance calculation
         if "error" in result:
             return 0.1
         
-        # Count the number of meaningful results
-        results = result.get("results", [])
-        if not results:
+        total = 0
+        for key in ("events", "entities", "facts"):
+            total += len(result.get(key, []))
+        
+        if total == 0:
             return 0.2
         
-        # More results generally mean higher relevance, but cap it
-        result_count = len(results)
-        relevance = min(0.9, 0.3 + (result_count * 0.1))
+        relevance = min(0.9, 0.3 + (total * 0.1))
         
-        # Boost for specific query types if results match expectations
         query_lower = query.lower()
-        if any(word in query_lower for word in ["who", "what", "where"]) and result_count > 0:
+        if any(word in query_lower for word in ["who", "what", "where"]) and total > 0:
             relevance = min(1.0, relevance + 0.1)
         
         return relevance
-    
+
+    async def _search_events_ftx(self, query: str, limit: int = 10) -> List[Dict]:
+        """Lexical search via FTX index."""
+        query_escaped = escape_surrealql(query)
+        forgotten_filter = "(forgotten IS NONE OR forgotten = false)"
+        sql = f"""
+        SELECT id, content, timestamp, source, metadata
+        FROM event
+        WHERE content @@ '{query_escaped}'
+          AND {forgotten_filter}
+        LIMIT {limit * 4};
+        """
+        result = await _query_surreal(sql)
+        return _extract_result(result, 1) or []
+
+    async def _search_events_temporal(self, query: str, limit: int = 10) -> List[Dict]:
+        """Temporal search (recent events)."""
+        forgotten_filter = "(forgotten IS NONE OR forgotten = false)"
+        sql = f"""
+        SELECT id, content, timestamp, source, metadata
+        FROM event
+        WHERE {forgotten_filter}
+        ORDER BY timestamp DESC
+        LIMIT {limit};
+        """
+        result = await _query_surreal(sql)
+        return _extract_result(result, 1) or []
+
+    async def _search_kg_by_subject(self, subject: str) -> List[Dict]:
+        """Search knowledge graph by subject name."""
+        subject_escaped = escape_surrealql(subject)
+        sql = f"""
+        SELECT id, in, out, predicate, confidence, valid_from, valid_until
+        FROM fact
+        WHERE in.name = '{subject_escaped}'
+        ORDER BY confidence DESC
+        LIMIT 50;
+        """
+        result = await _query_surreal(sql)
+        return _extract_result(result, 1) or []
+
+    async def _search_kg_by_text(self, text: str) -> List[Dict]:
+        """Search knowledge graph by matching predicate or entity names."""
+        text_escaped = escape_surrealql(text)
+        sql = f"""
+        SELECT id, in, out, predicate, confidence, valid_from, valid_until
+        FROM fact
+        WHERE predicate CONTAINS '{text_escaped}'
+           OR in.name CONTAINS '{text_escaped}'
+           OR out.name CONTAINS '{text_escaped}'
+        ORDER BY confidence DESC
+        LIMIT 50;
+        """
+        result = await _query_surreal(sql)
+        return _extract_result(result, 1) or []
+
+    async def _search_entities_by_name(self, name: str) -> List[Dict]:
+        """Search entities by name (substring match via CONTAINS)."""
+        name_escaped = escape_surrealql(name)
+        sql = f"""
+        SELECT id, name, type
+        FROM entity
+        WHERE name CONTAINS '{name_escaped}'
+        LIMIT 20;
+        """
+        result = await _query_surreal(sql)
+        return _extract_result(result, 1) or []
+
     async def _execute_event_log_first(self, query: str, budget_tracker: BudgetTracker, **kwargs) -> Dict[str, Any]:
-        """Execute event log first strategy."""
-        # Simulate database calls
-        budget_tracker.increment_db_calls(1)
-        budget_tracker.increment_tokens(len(query) // 4)  # Rough token estimation
+        """Execute event log first strategy — search events via FTX + temporal."""
+        budget_tracker.increment_db_calls(2)
+        budget_tracker.increment_tokens(len(query) // 4)
         
-        # Actual implementation would go here
-        # For now, simulate the operation
-        await asyncio.sleep(0.1)  # Simulate I/O delay
+        ftx_events, temporal_events = await asyncio.gather(
+            self._search_events_ftx(query, 10),
+            self._search_events_temporal(query, 5)
+        )
+        
+        # RRF fusion
+        k = 60
+        seen_ids = set()
+        fused = []
+        for rank, ev in enumerate(ftx_events):
+            eid = ev.get("id")
+            if eid and eid not in seen_ids:
+                seen_ids.add(eid)
+                ev["_rrf_score"] = 1.0 / (k + rank)
+                fused.append(ev)
+        for rank, ev in enumerate(temporal_events):
+            eid = ev.get("id")
+            if eid and eid not in seen_ids:
+                seen_ids.add(eid)
+                ev["_rrf_score"] = 1.0 / (k + len(ftx_events) + rank)
+                fused.append(ev)
+        
+        fused.sort(key=lambda x: x.get("_rrf_score", 0), reverse=True)
+        for ev in fused:
+            ev.pop("_rrf_score", None)
         
         return {
             "strategy": "event_log_first",
-            "results": [{"type": "event", "content": f"Event result for: {query}", "id": "event:123"}],
+            "events": _clean_output(fused[:10]),
+            "entities": [],
+            "facts": [],
             "query": query
         }
     
     async def _execute_knowledge_graph_first(self, query: str, budget_tracker: BudgetTracker, **kwargs) -> Dict[str, Any]:
-        """Execute knowledge graph first strategy."""
-        budget_tracker.increment_db_calls(1)
+        """Execute knowledge graph first strategy — search KG + entities."""
+        budget_tracker.increment_db_calls(3)
         budget_tracker.increment_tokens(len(query) // 4)
         
-        await asyncio.sleep(0.15)  # Simulate I/O delay
+        # Extract potential subject words from query (simple heuristic)
+        words = query.split()
+        subjects_to_try = []
+        for w in words:
+            w_clean = w.strip(",.!?;:")
+            if w_clean and w_clean[0].isupper():
+                subjects_to_try.append(w_clean)
+        if not subjects_to_try:
+            subjects_to_try = [query]
+        
+        # Search entities and KG in parallel
+        entity_tasks = [self._search_entities_by_name(s) for s in subjects_to_try[:3]]
+        kg_tasks = [self._search_kg_by_text(query)]
+        
+        all_results = await asyncio.gather(*(entity_tasks + kg_tasks))
+        
+        entities = []
+        seen_entity_ids = set()
+        for r in all_results[:len(entity_tasks)]:
+            for e in r:
+                eid = e.get("id")
+                if eid and eid not in seen_entity_ids:
+                    seen_entity_ids.add(eid)
+                    entities.append(e)
+        
+        facts = []
+        seen_fact_ids = set()
+        for r in all_results[len(entity_tasks):]:
+            for f in r:
+                fid = f.get("id")
+                if fid and fid not in seen_fact_ids:
+                    seen_fact_ids.add(fid)
+                    facts.append(f)
         
         return {
             "strategy": "knowledge_graph_first",
-            "results": [{"type": "entity", "name": query, "relations": []}],
+            "events": [],
+            "entities": _clean_output(entities),
+            "facts": _clean_output(facts),
             "query": query
         }
     
     async def _execute_hybrid_with_graph_expansion(self, query: str, budget_tracker: BudgetTracker, **kwargs) -> Dict[str, Any]:
-        """Execute hybrid with graph expansion strategy."""
-        budget_tracker.increment_db_calls(2)
-        budget_tracker.increment_tokens(len(query) // 3)  # Higher token usage due to expansion
+        """Execute hybrid with graph expansion — events + KG + entity expansion."""
+        budget_tracker.increment_db_calls(4)
+        budget_tracker.increment_tokens(len(query) // 3)
         
-        await asyncio.sleep(0.25)  # More complex operation
+        ftx_events, kg_facts, entities = await asyncio.gather(
+            self._search_events_ftx(query, 10),
+            self._search_kg_by_text(query),
+            self._search_entities_by_name(query)
+        )
+        
+        # Expand: for each found entity, get related facts
+        expanded_facts = list(kg_facts)
+        seen_fact_ids = {f.get("id") for f in kg_facts if f.get("id")}
+        for ent in entities[:5]:
+            ent_name = ent.get("name", "")
+            if ent_name:
+                more_facts = await self._search_kg_by_subject(ent_name)
+                for f in more_facts:
+                    fid = f.get("id")
+                    if fid and fid not in seen_fact_ids:
+                        seen_fact_ids.add(fid)
+                        expanded_facts.append(f)
         
         return {
             "strategy": "hybrid_with_graph_expansion",
-            "results": [
-                {"type": "entity", "name": query, "relations": ["expanded"]},
-                {"type": "event", "content": f"Related to {query}", "id": "event:456"}
-            ],
+            "events": _clean_output(ftx_events),
+            "entities": _clean_output(entities),
+            "facts": _clean_output(expanded_facts),
             "query": query
         }
     
     async def _execute_composite_kg_vector(self, query: str, budget_tracker: BudgetTracker, **kwargs) -> Dict[str, Any]:
-        """Execute composite KG-vector strategy."""
-        budget_tracker.increment_db_calls(2)
+        """Execute composite KG-vector strategy — KG facts + vector search on events."""
+        budget_tracker.increment_db_calls(3)
         budget_tracker.increment_tokens(len(query) // 3)
         
-        await asyncio.sleep(0.2)
+        kg_facts, entities, ftx_events = await asyncio.gather(
+            self._search_kg_by_text(query),
+            self._search_entities_by_name(query),
+            self._search_events_ftx(query, 10)
+        )
         
         return {
             "strategy": "composite_kg_vector",
-            "results": [{"type": "combined", "content": f"Combined result for: {query}"}],
+            "events": _clean_output(ftx_events),
+            "entities": _clean_output(entities),
+            "facts": _clean_output(kg_facts),
             "query": query
         }
     
     async def _execute_knowledge_graph_with_invalidation(self, query: str, budget_tracker: BudgetTracker, **kwargs) -> Dict[str, Any]:
-        """Execute knowledge graph with invalidation strategy."""
-        budget_tracker.increment_db_calls(2)  # Includes write operations
+        """Execute knowledge graph with invalidation — search KG + check for stale facts."""
+        budget_tracker.increment_db_calls(3)
         budget_tracker.increment_tokens(len(query) // 4)
         
-        await asyncio.sleep(0.3)  # Invalidation is more expensive
+        kg_facts, entities = await asyncio.gather(
+            self._search_kg_by_text(query),
+            self._search_entities_by_name(query)
+        )
+        
+        # Check for invalidated (stale) facts among results
+        stale_facts = [f for f in kg_facts if f.get("valid_until") is not None]
+        active_facts = [f for f in kg_facts if f.get("valid_until") is None]
         
         return {
             "strategy": "knowledge_graph_with_invalidation",
-            "results": [{"type": "updated", "content": f"Updated knowledge for: {query}"}],
+            "events": [],
+            "entities": _clean_output(entities),
+            "facts": _clean_output(active_facts),
+            "stale_facts": _clean_output(stale_facts),
             "query": query
         }
     
     async def _execute_hybrid_bm25_vector_temporal(self, query: str, budget_tracker: BudgetTracker, **kwargs) -> Dict[str, Any]:
-        """Execute hybrid BM25-vector-temporal strategy."""
-        budget_tracker.increment_db_calls(2)
+        """Execute hybrid BM25-vector-temporal — full event search + KG."""
+        budget_tracker.increment_db_calls(4)
         budget_tracker.increment_tokens(len(query) // 3)
         
-        await asyncio.sleep(0.2)
+        ftx_events, temporal_events, kg_facts, entities = await asyncio.gather(
+            self._search_events_ftx(query, 10),
+            self._search_events_temporal(query, 5),
+            self._search_kg_by_text(query),
+            self._search_entities_by_name(query)
+        )
+        
+        # RRF fusion for events
+        k = 60
+        seen_ids = set()
+        fused = []
+        for rank, ev in enumerate(ftx_events):
+            eid = ev.get("id")
+            if eid and eid not in seen_ids:
+                seen_ids.add(eid)
+                ev["_rrf_score"] = 1.0 / (k + rank)
+                fused.append(ev)
+        for rank, ev in enumerate(temporal_events):
+            eid = ev.get("id")
+            if eid and eid not in seen_ids:
+                seen_ids.add(eid)
+                ev["_rrf_score"] = 1.0 / (k + len(ftx_events) + rank)
+                fused.append(ev)
+        
+        fused.sort(key=lambda x: x.get("_rrf_score", 0), reverse=True)
+        for ev in fused:
+            ev.pop("_rrf_score", None)
         
         return {
             "strategy": "hybrid_bm25_vector_temporal",
-            "results": [{"type": "hybrid", "content": f"Hybrid result for: {query}"}],
+            "events": _clean_output(fused[:10]),
+            "entities": _clean_output(entities),
+            "facts": _clean_output(kg_facts),
             "query": query
         }
     
     async def _execute_hybrid_fallback(self, query: str, budget_tracker: BudgetTracker, **kwargs) -> Dict[str, Any]:
-        """Execute hybrid fallback strategy."""
-        budget_tracker.increment_db_calls(1)
+        """Execute hybrid fallback strategy — search everything available."""
+        budget_tracker.increment_db_calls(3)
         budget_tracker.increment_tokens(len(query) // 4)
         
-        await asyncio.sleep(0.1)
+        ftx_events, kg_facts, entities = await asyncio.gather(
+            self._search_events_ftx(query, 5),
+            self._search_kg_by_text(query),
+            self._search_entities_by_name(query)
+        )
         
         return {
             "strategy": "hybrid_fallback",
-            "results": [{"type": "fallback", "content": f"Fallback result for: {query}"}],
+            "events": _clean_output(ftx_events),
+            "entities": _clean_output(entities),
+            "facts": _clean_output(kg_facts),
             "query": query
         }
 
