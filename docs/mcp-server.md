@@ -113,7 +113,7 @@ The server speaks MCP over stdin/stdout. Most MCP clients start the server as a 
   "mcpServers": {
     "STRATA-memory": {
       "command": "python",
-      "args": ["-m", "src.mcp.server_modular"],
+      "args": ["-m", "src.mcp.server"],
       "cwd": "C:\\workspace\\STRATA",
       "env": {
         "PYTHONPATH": "C:\\workspace\\STRATA"

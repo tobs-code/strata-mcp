@@ -23,16 +23,13 @@ from .core import (
     cost_tracker,
     _query_surreal,
     _extract_result,
-    _clean_output,
-    _get_or_create_entity
+    _clean_output
 )
 
 from .common_logic import (
     _store_content,
     _execute_query,
-    _flatten_query_results,
-    _categorize_results,
-    _get_or_create_entity as common_get_or_create_entity
+    _get_or_create_entity
 )
 
 from .tools import (
@@ -84,15 +81,23 @@ if __name__ == "__main__":
 
 # Export the main components for easy access
 __all__ = [
-    # Core components
-    'app', 'mcp', 'ensure_schema_loaded', 'cost_tracker',
-    
-    # Query and data processing functions
-    '_query_surreal', '_extract_result', '_clean_output',
-    '_store_content', '_execute_query',
-    
-    # Tools
-    'memory_store', 'memory_query', 'memory_update', 'memory_stats',
-    'event_log_search', 'kg_query', 'semantic_search', 'explain_routing',
-    'memory_forget', 'memory_consolidate'
+    'app',
+    'mcp',
+    'ensure_schema_loaded',
+    'cost_tracker',
+    '_query_surreal',
+    '_extract_result',
+    '_clean_output',
+    '_store_content',
+    '_execute_query',
+    'memory_store',
+    'memory_query',
+    'memory_update',
+    'memory_stats',
+    'event_log_search',
+    'kg_query',
+    'semantic_search',
+    'explain_routing',
+    'memory_forget',
+    'memory_consolidate'
 ]
