@@ -1,219 +1,291 @@
 """
-Adaptive Routing Policy for Strata
-Based on query type and confidence, decides which strategy to use
-Includes historical performance tracking for dynamic threshold adjustment.
-Integrated with CostTracker for empirical cost calibration.
+Routing Policy with cost awareness and adaptive enforcement.
+Implements adaptive routing based on query type and learned strategy effectiveness.
 """
-from typing import Dict, Any, Optional
-from datetime import datetime, timezone
-from collections import defaultdict
 
-try:
-    import tiktoken
-except ImportError:  # pragma: no cover
-    tiktoken = None  # type: ignore
+from typing import Dict, Optional, Any, Tuple
+from enum import Enum
+import threading
+import time
+from datetime import datetime, timedelta
+import logging
+from ..cost_awareness import cost_tracker
 
-from src.router.cost_awareness import CostTracker
+
+class QueryType(Enum):
+    TEMPORAL = "temporal"
+    FACTUAL = "factual"
+    MULTI_HOP = "multi_hop"
+    CONVERSATIONAL = "conversational"
+    UPDATE = "update"
+
+
+class BudgetLevel(Enum):
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
 
 
 class OverBudget(Exception):
-    """Raised when a query exceeds its configured cost budget."""
+    """Raised when a request exceeds its allocated budget."""
     pass
 
 
 class BudgetTracker:
-    """Tracks resource consumption against a cost budget with adaptive scaling."""
+    """
+    Tracks resource consumption for individual requests.
+    Uses a global health factor to adaptively scale limits based on system health.
+    """
+    # Class-level health factor to ensure all trackers react to system health simultaneously
+    _health_factor = 1.0  # 1.0 = healthy, 0.1 = very unhealthy
+    _health_lock = threading.Lock()
     
-    _health_factor = 1.0
-    
-    @classmethod
-    def update_system_health(cls, factor: float) -> None:
-        cls._health_factor = max(0.1, min(1.0, factor))
-    
-    def __init__(self, budget: str):
-        self.budget = budget
+    def __init__(self):
         self.db_calls = 0
         self.estimated_tokens = 0
-        self.start_time = datetime.now(timezone.utc)
-        self.end_time: Optional[datetime] = None
-    
-    def record_db_call(self, count: int = 1) -> None:
-        self.db_calls += count
-    
-    def record_tokens(self, count: int) -> None:
+        self.start_time = time.time()
+        
+        # Default limits per budget level
+        self.limits = {
+            BudgetLevel.LOW: {
+                'db_calls': 10,
+                'tokens': 1000
+            },
+            BudgetLevel.MEDIUM: {
+                'db_calls': 25,
+                'tokens': 3000
+            },
+            BudgetLevel.HIGH: {
+                'db_calls': 50,
+                'tokens': 8000
+            }
+        }
+
+    @classmethod
+    def update_system_health(cls, factor: float):
+        """Update the global health factor."""
+        with cls._health_lock:
+            cls._health_factor = max(0.1, min(1.0, factor))
+
+    @classmethod
+    def get_system_health(cls) -> float:
+        """Get the current system health factor."""
+        with cls._health_lock:
+            return cls._health_factor
+
+    def track_db_call(self):
+        """Increment database call counter."""
+        self.db_calls += 1
+
+    def track_tokens(self, count: int):
+        """Increment token counter."""
         self.estimated_tokens += count
-    
-    def finish(self) -> None:
-        self.end_time = datetime.now(timezone.utc)
-    
-    def is_over_budget(self) -> bool:
-        limits = {
-            "low": {"db_calls": 10, "tokens": 1000},
-            "medium": {"db_calls": 25, "tokens": 3000},
-            "high": {"db_calls": 50, "tokens": 8000},
-        }
-        limit_config = limits.get(self.budget, limits["medium"])
-        max_db = int(limit_config["db_calls"] * self._health_factor)
-        max_tokens = int(limit_config["tokens"] * self._health_factor)
-        return self.db_calls > max_db or self.estimated_tokens > max_tokens
-    
-    def to_dict(self) -> Dict[str, Any]:
-        duration = 0.0
-        if self.end_time:
-            duration = (self.end_time - self.start_time).total_seconds()
+
+    def is_over_budget(self, budget_level: BudgetLevel) -> bool:
+        """Check if current usage exceeds budget."""
+        limits = self.limits[budget_level]
+        health_factor = self.get_system_health()
+        
+        # Scale limits based on system health
+        max_db = int(limits['db_calls'] * health_factor)
+        max_tokens = int(limits['tokens'] * health_factor)
+        
+        return (self.db_calls > max_db or self.estimated_tokens > max_tokens)
+
+    def get_remaining_budget(self, budget_level: BudgetLevel) -> Dict[str, int]:
+        """Get remaining budget."""
+        limits = self.limits[budget_level]
+        health_factor = self.get_system_health()
+        
+        max_db = int(limits['db_calls'] * health_factor)
+        max_tokens = int(limits['tokens'] * health_factor)
+        
         return {
-            "budget": self.budget,
-            "db_calls": self.db_calls,
-            "estimated_tokens": self.estimated_tokens,
-            "duration_seconds": round(duration, 3),
-            "over_budget": self.is_over_budget(),
+            'remaining_db_calls': max(0, max_db - self.db_calls),
+            'remaining_tokens': max(0, max_tokens - self.estimated_tokens)
         }
-
-
-_DEFAULT_THRESHOLDS = {
-    "temporal": 0.50,
-    "factual": 0.60,
-    "multi-hop": 0.70,
-    "conversational": 0.55,
-    "update": 0.75,
-}
 
 
 class RoutingPolicy:
-    def __init__(self, config: Dict[str, Any] = None, thresholds: Optional[Dict[str, float]] = None,
-                 cost_tracker: Optional[CostTracker] = None):
-        self.config = config or {
-            "temporal": {"strategy": "hybrid_bm25_vector_temporal", "cost_budget": "medium"},
-            "factual": {"strategy": "hybrid_bm25_vector_temporal", "cost_budget": "medium"},
-            "multi-hop": {"strategy": "hybrid_with_graph_expansion", "cost_budget": "high"},
-            "conversational": {"strategy": "composite_kg_vector", "cost_budget": "medium"},
-            "update": {"strategy": "knowledge_graph_with_invalidation", "cost_budget": "high"},
-        }
-        self._thresholds = dict(_DEFAULT_THRESHOLDS)
-        for qt, cfg in self.config.items():
-            legacy_conf = cfg.get("min_confidence")
-            if legacy_conf is not None:
-                self._thresholds[qt] = legacy_conf
-        if thresholds:
-            self._thresholds.update(thresholds)
-        self._usage: Dict[str, BudgetTracker] = {}
-        self._usage_strategies: Dict[str, str] = {}
-
-        self._history: Dict[str, list[bool]] = defaultdict(list)
-        self._history_max = 100
-
-        self.cost_tracker = cost_tracker
-
-    def get_strategy(self, query_type: str, confidence: float, query_hash: Optional[str] = None) -> Dict[str, Any]:
-        base_config = self.config.get(query_type) or self.config.get("factual")
-        min_confidence = self._get_dynamic_threshold(query_type)
-
-        strategy: Dict[str, Any] = {
-            "strategy": "hybrid_fallback",
-            "cost_budget": "medium",
-            "query_type": query_type,
-            "confidence": confidence,
-            "policy_applied": "fallback",
-            "min_confidence": min_confidence,
-        }
-        if base_config and confidence >= min_confidence:
-            strategy = {
-                "strategy": base_config.get("strategy", strategy["strategy"]),
-                "cost_budget": base_config.get("cost_budget", strategy["cost_budget"]),
-                "query_type": query_type,
-                "confidence": confidence,
-                "policy_applied": "strict",
-                "min_confidence": min_confidence,
+    """
+    Determines routing strategy based on query type and learned effectiveness.
+    Now incorporates adaptive cost-awareness using CostTracker metrics.
+    """
+    
+    def __init__(self):
+        # Thread safety for concurrent access
+        self._lock = threading.RLock()
+        
+        # Store usage patterns per query type (timestamp-based for cleanup)
+        self._usage: Dict[str, Dict[str, Any]] = {}
+        
+        # Default configuration per query type
+        self.config = {
+            QueryType.TEMPORAL: {
+                'strategy': 'event_log_first',
+                'budget': BudgetLevel.MEDIUM,
+                'min_confidence': 0.5,
+                'max_latency_threshold': 1.0  # seconds
+            },
+            QueryType.FACTUAL: {
+                'strategy': 'knowledge_graph_first',
+                'budget': BudgetLevel.MEDIUM,
+                'min_confidence': 0.7,
+                'max_latency_threshold': 0.8
+            },
+            QueryType.MULTI_HOP: {
+                'strategy': 'hybrid_with_graph_expansion',
+                'budget': BudgetLevel.HIGH,
+                'min_confidence': 0.8,
+                'max_latency_threshold': 2.0
+            },
+            QueryType.CONVERSATIONAL: {
+                'strategy': 'hybrid_bm25_vector_temporal',
+                'budget': BudgetLevel.MEDIUM,
+                'min_confidence': 0.6,
+                'max_latency_threshold': 1.2
+            },
+            QueryType.UPDATE: {
+                'strategy': 'knowledge_graph_with_invalidation',
+                'budget': BudgetLevel.HIGH,
+                'min_confidence': 0.9,
+                'max_latency_threshold': 1.5
             }
+        }
+        
+        # Cleanup interval for usage tracking (avoid memory leaks)
+        self._cleanup_interval = timedelta(minutes=30)
+        self._last_cleanup = datetime.now()
 
-        budget = strategy.get("cost_budget", "medium")
-        tracker = BudgetTracker(budget=budget)
-        strategy_name = strategy.get("strategy", "hybrid_fallback")
-        key = query_hash or f"{query_type}:{confidence}:{datetime.now(timezone.utc).timestamp()}"
-        self._usage[key] = tracker
-        self._usage_strategies[key] = strategy_name
-        strategy["budget_tracker_key"] = key
-        strategy["budget"] = budget
+    def _cleanup_old_usage(self):
+        """Remove old usage entries to prevent memory leaks."""
+        now = datetime.now()
+        if now - self._last_cleanup > self._cleanup_interval:
+            with self._lock:
+                # Remove entries older than 1 hour
+                cutoff = now - timedelta(hours=1)
+                keys_to_remove = [
+                    k for k, v in self._usage.items()
+                    if v.get('timestamp', datetime.min) < cutoff
+                ]
+                
+                for key in keys_to_remove:
+                    del self._usage[key]
+                
+                self._last_cleanup = now
 
-        return strategy
+    def _get_adapted_strategy(self, query_type: QueryType) -> str:
+        """
+        Get the most effective strategy for a query type based on learned metrics.
+        Falls back to config default if no learning data available.
+        """
+        with self._lock:
+            # Get base strategy from config
+            base_config = self.config.get(query_type)
+            if not base_config:
+                # Fallback to factual if unknown query type
+                base_config = self.config[QueryType.FACTUAL]
+                logging.warning(f"Unknown query type {query_type}, falling back to factual config")
+            
+            base_strategy = base_config['strategy']
+            
+            # Get ranked strategies from cost tracker
+            ranked_strategies = cost_tracker.get_all_strategies_ranked()
+            
+            if ranked_strategies:
+                # Find the best performing strategy that's appropriate for this query type
+                for strategy, score in ranked_strategies:
+                    # Only consider strategies that are valid for this query type
+                    # We prefer strategies with good effectiveness scores
+                    if self._is_strategy_appropriate_for_query_type(strategy, query_type):
+                        return strategy
+            
+            # Fall back to configured default
+            return base_strategy
 
-    def _get_dynamic_threshold(self, query_type: str) -> float:
-        """Gibt den dynamischen Threshold zurück, basierend auf Baseline und historischer Performance."""
-        baseline = self._thresholds.get(query_type, 0.6)
-        outcomes = self._history.get(query_type, [])
-        if len(outcomes) < 10:
-            return baseline
-        success_rate = sum(outcomes) / len(outcomes)
-        if success_rate < 0.5:
-            return min(baseline + 0.15, 0.9)
-        elif success_rate > 0.85:
-            return max(baseline - 0.1, 0.3)
-        return baseline
+    def _is_strategy_appropriate_for_query_type(self, strategy: str, query_type: QueryType) -> bool:
+        """Check if a strategy is appropriate for a specific query type."""
+        # Define strategy-query type compatibility
+        compatible_strategies = {
+            QueryType.TEMPORAL: ['event_log_first', 'hybrid_bm25_vector_temporal'],
+            QueryType.FACTUAL: ['knowledge_graph_first', 'hybrid_with_graph_expansion'],
+            QueryType.MULTI_HOP: ['hybrid_with_graph_expansion', 'knowledge_graph_with_invalidation'],
+            QueryType.CONVERSATIONAL: ['hybrid_bm25_vector_temporal', 'composite_kg_vector'],
+            QueryType.UPDATE: ['knowledge_graph_with_invalidation', 'knowledge_graph_first']
+        }
+        
+        compatible = compatible_strategies.get(query_type, [])
+        return strategy in compatible
 
-    def record_outcome(self, query_type: str, success: bool) -> None:
-        """Zeichnet Erfolg/Misserfolg für einen Query-Typ auf (für dynamische Thresholds)."""
-        self._history[query_type].append(success)
-        if len(self._history[query_type]) > self._history_max:
-            self._history[query_type].pop(0)
-
-    def get_thresholds(self) -> Dict[str, float]:
-        """Gibt die aktuellen dynamischen Thresholds zurück."""
-        return {qt: self._get_dynamic_threshold(qt) for qt in self._thresholds}
-
-    def get_history(self) -> Dict[str, Dict[str, Any]]:
-        """Gibt die historischen Statistiken pro Query-Typ zurück."""
-        stats = {}
-        for qt, outcomes in self._history.items():
-            stats[qt] = {
-                "total": len(outcomes),
-                "successes": sum(outcomes),
-                "success_rate": sum(outcomes) / len(outcomes) if outcomes else 0.0,
+    def get_strategy(self, query_type: QueryType, confidence: float) -> Tuple[str, BudgetLevel, str]:
+        """
+        Determine the optimal strategy based on query type, confidence, and learned effectiveness.
+        
+        Returns:
+            Tuple of (strategy, budget_level, policy_applied)
+        """
+        with self._lock:
+            # Perform periodic cleanup
+            self._cleanup_old_usage()
+            
+            # Get base configuration
+            base_config = self.config.get(query_type)
+            if not base_config:
+                # Fallback to factual if unknown query type
+                base_config = self.config[QueryType.FACTUAL]
+                logging.warning(f"Unknown query type {query_type}, falling back to factual config")
+            
+            # Check if confidence is high enough for primary strategy
+            min_confidence = base_config['min_confidence']
+            
+            # Get the adapted strategy based on learned effectiveness
+            if confidence >= min_confidence:
+                strategy = self._get_adapted_strategy(query_type)
+                policy_applied = "strict"
+            else:
+                # Use fallback strategy when confidence is low
+                strategy = "hybrid_fallback"
+                policy_applied = "fallback"
+            
+            budget = base_config['budget']
+            
+            # Record this usage pattern
+            usage_key = f"{query_type.value}_{datetime.now().isoformat()}"
+            self._usage[usage_key] = {
+                'query_type': query_type.value,
+                'strategy': strategy,
+                'confidence': confidence,
+                'budget': budget.value,
+                'timestamp': datetime.now(),
+                'policy_applied': policy_applied
             }
-        return stats
+            
+            return strategy, budget, policy_applied
 
-    def get_tracker(self, key: str) -> Optional[BudgetTracker]:
-        return self._usage.get(key)
-    
-    def record_db_call(self, key: str, count: int = 1) -> None:
-        tracker = self._usage.get(key)
-        if tracker:
-            tracker.record_db_call(count)
-    
-    def record_tokens(self, key: str, count: int) -> None:
-        tracker = self._usage.get(key)
-        if tracker:
-            tracker.record_tokens(count)
-    
-    def finish_execution(self, key: str, success: bool = True) -> Optional[Dict[str, Any]]:
-        tracker = self._usage.get(key)
-        if tracker:
-            tracker.finish()
-            budget_data = tracker.to_dict()
-            strategy_name = self._usage_strategies.get(key, "unknown")
-            if self.cost_tracker is not None:
-                self.cost_tracker.feed_budget_tracker(strategy_name, budget_data, success)
-            return budget_data
-        return None
-    
-    def is_over_budget(self, key: str) -> bool:
-        tracker = self._usage.get(key)
-        return bool(tracker and tracker.is_over_budget())
+    def get_budget_for_query(self, query_type: QueryType) -> BudgetLevel:
+        """Get the appropriate budget level for a query type."""
+        with self._lock:
+            base_config = self.config.get(query_type)
+            if not base_config:
+                base_config = self.config[QueryType.FACTUAL]
+            return base_config['budget']
 
+    def update_query_config(self, query_type: QueryType, **kwargs):
+        """Update configuration for a specific query type."""
+        with self._lock:
+            if query_type in self.config:
+                self.config[query_type].update(kwargs)
+            else:
+                raise ValueError(f"Unknown query type: {query_type}")
 
-if __name__ == "__main__":
-    # Test the routing policy
-    policy = RoutingPolicy()
-    
-    test_cases = [
-        ("temporal", 0.9),
-        ("factual", 0.8),
-        ("multi-hop", 0.7),
-        ("conversational", 0.9),
-        ("update", 0.8),
-        ("temporal", 0.4),  # Low confidence should trigger fallback
-    ]
-    
-    print("Strata Routing Policy Test:")
-    for q_type, conf in test_cases:
-        strategy = policy.get_strategy(q_type, conf)
-        print(f"  {q_type} (conf={conf:.1f}): {strategy['strategy']} [{strategy['cost_budget']}]")
+    def get_all_costs(self) -> Dict:
+        """Get all cost information from both policy and cost tracker."""
+        with self._lock:
+            return {
+                'policy_config': {
+                    qt.value: config for qt, config in self.config.items()
+                },
+                'cost_tracker_metrics': cost_tracker.get_all_costs(),
+                'system_health': BudgetTracker.get_system_health(),
+                'usage_patterns_count': len(self._usage)
+            }

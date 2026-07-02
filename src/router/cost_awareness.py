@@ -1,221 +1,163 @@
-"""
-Cost Awareness Module for Router
-Empirically calibrated cost model, fed by BudgetTracker execution data.
-"""
-import time
 from collections import defaultdict
-from typing import Dict, Any, Optional
+import time
+from typing import Dict, List, Optional, Tuple
+import threading
+from datetime import datetime, timedelta
 
 
 class CostTracker:
     """
-    Tracks and calibrates strategy costs from real BudgetTracker execution metrics.
-    Connects to BudgetTracker (policy.py) so cost data is empirical, not guessed.
+    Tracks performance metrics per strategy including latency, success rate, and cost.
+    Implements adaptive cost awareness by adjusting strategy effectiveness based on relevance feedback.
     """
 
     def __init__(self):
-        # Strategy → aggregated metrics from real BudgetTracker data
-        self.metrics = defaultdict(lambda: {
-            'total_queries': 0,
-            'total_db_calls': 0,
-            'total_tokens': 0,
-            'total_latency': 0.0,
-            'successful_queries': 0,
-            'total_cost': 0.0,
-            'db_calls_list': [],
-            'tokens_list': [],
-            'latencies': [],
-            'costs': [],
+        # Thread-safe storage for metrics
+        self._metrics_lock = threading.RLock()
+        
+        # Track strategy performance: {strategy_name: {metric: value}}
+        self._metrics = defaultdict(lambda: {
+            'latency_sum': 0.0,
+            'latency_count': 0,
+            'success_count': 0,
+            'total_count': 0,
+            'cost_sum': 0.0,
+            'cost_count': 0,
+            'last_used': None
         })
-
-        # Default weights – werden durch calibrate() überschrieben
-        self._db_call_weight = 1.0
-        self._token_weight = 0.001
-        self._latency_weight = 0.5
-
-    # ── Primäre API: Gefüttert von BudgetTracker ──────────────────────
-
-    def feed_budget_tracker(self, strategy: str, budget_data: Dict[str, Any], success: bool = True) -> float:
-        """
-        Nimmt echte Ausführungsdaten von BudgetTracker.to_dict() entgegen.
-        Berechnet die Kosten aus tatsächlichen db_calls, tokens und Laufzeit.
-        Gibt die berechneten Kosten zurück.
-        """
-        db_calls = budget_data.get('db_calls', 0)
-        tokens = budget_data.get('estimated_tokens', 0)
-        duration = budget_data.get('duration_seconds', 0.0)
-
-        cost = self._calculate_empirical_cost(db_calls, tokens, duration)
-
-        m = self.metrics[strategy]
-        m['total_queries'] += 1
-        m['total_db_calls'] += db_calls
-        m['total_tokens'] += tokens
-        m['total_latency'] += duration
-        m['total_cost'] += cost
-        m['db_calls_list'].append(db_calls)
-        m['tokens_list'].append(tokens)
-        m['latencies'].append(duration)
-        m['costs'].append(cost)
-
-        if success:
-            m['successful_queries'] += 1
-
-        return cost
-
-    # ── Legacy-Kompatibilität ─────────────────────────────────────────
-
-    def track_query(self, strategy: str, latency: float = 0.0,
-                    num_queries: int = 1, success: bool = False,
-                    relevance: float = 0.5) -> None:
-        """
-        Legacy-Methode – wird durch feed_budget_tracker() ersetzt.
-        Wandelt die alten Parameter in einen BudgetTracker-ähnlichen Dict um.
-        """
-        budget_data = {
-            'db_calls': num_queries,
-            'estimated_tokens': int(max(1, latency * 1000)),
-            'duration_seconds': latency,
-        }
-        self.feed_budget_tracker(strategy, budget_data, success)
-
-    # ── Kostenberechnung ──────────────────────────────────────────────
-
-    def _calculate_empirical_cost(self, db_calls: int, tokens: int, duration: float) -> float:
-        """Kosten aus tatsächlichem Ressourcenverbrauch."""
-        return (db_calls * self._db_call_weight
-                + tokens * self._token_weight
-                + duration * self._latency_weight)
-
-    def get_empirical_base_cost(self, strategy: str) -> float:
-        """
-        Gibt den empirisch ermittelten Basiskostenfaktor pro Query für eine Strategie zurück.
-        Liefert einen Fallback-Schätzwert, solange noch keine Echtzeit-Daten vorliegen.
-        """
-        m = self.metrics.get(strategy)
-        if not m or m['total_queries'] == 0:
-            return self._fallback_base_cost(strategy)
-
-        avg_db = sum(m['db_calls_list']) / len(m['db_calls_list'])
-        avg_tokens = sum(m['tokens_list']) / len(m['tokens_list'])
-        avg_dur = sum(m['latencies']) / len(m['latencies'])
-        return self._calculate_empirical_cost(int(avg_db), int(avg_tokens), avg_dur)
-
-    @staticmethod
-    def _fallback_base_cost(strategy: str) -> float:
-        """Schätzwerte, bis echte Daten vorliegen (werden von calibrate überschrieben)."""
-        return {
-            'event_log_first': 1.0,
+        
+        # Base costs per strategy (reflects computational complexity)
+        self.base_costs = {
+            'event_log_first': 0.5,
             'knowledge_graph_first': 1.0,
-            'hybrid_fallback': 2.0,
-            'composite_kg_vector': 3.0,
-            'hybrid_with_graph_expansion': 4.0,
-            'knowledge_graph_with_invalidation': 5.0,
-        }.get(strategy, 2.0)
-
-    # ── Selbstkalibrierung ────────────────────────────────────────────
-
-    def calibrate(self) -> dict:
-        """
-        Kalibriert die Gewichte auf Basis der historischen Daten aller Strategien.
-        Sollte periodisch aufgerufen werden (z. B. alle 100 Queries).
-        """
-        all_db = []
-        all_tok = []
-        all_dur = []
-        for m in self.metrics.values():
-            all_db.extend(m['db_calls_list'])
-            all_tok.extend(m['tokens_list'])
-            all_dur.extend(m['latencies'])
-
-        if not all_db:
-            return {'status': 'skipped', 'reason': 'no_data'}
-
-        avg_db = sum(all_db) / len(all_db) if all_db else 1
-        avg_tok = sum(all_tok) / len(all_tok) if all_tok else 1
-        avg_dur = sum(all_dur) / len(all_dur) if all_dur else 0.1
-
-        self._db_call_weight = 1.0
-        self._token_weight = max(0.0001, 1.0 / max(avg_tok, 1))
-        self._latency_weight = max(0.01, 1.0 / max(avg_dur, 0.01))
-
-        return {
-            'status': 'calibrated',
-            'db_call_weight': round(self._db_call_weight, 4),
-            'token_weight': round(self._token_weight, 6),
-            'latency_weight': round(self._latency_weight, 4),
-            'samples': len(all_db),
+            'hybrid_with_graph_expansion': 1.2,
+            'composite_kg_vector': 1.0,
+            'knowledge_graph_with_invalidation': 2.0,  # Most expensive due to writes
+            'hybrid_bm25_vector_temporal': 1.1,
+            'hybrid_fallback': 0.8
         }
 
-    # ── Abfragen ──────────────────────────────────────────────────────
+    def record_request(self, strategy: str, latency: float, success: bool, num_queries: int = 1, relevance: float = 1.0):
+        """
+        Records a request with its performance metrics.
+        
+        Args:
+            strategy: The strategy used
+            latency: Time taken in seconds
+            success: Whether the request was successful
+            num_queries: Number of database queries made
+            relevance: Relevance score of results (0.0 to 1.0)
+        """
+        with self._metrics_lock:
+            metrics = self._metrics[strategy]
+            
+            # Update basic metrics
+            metrics['latency_sum'] += latency
+            metrics['latency_count'] += 1
+            
+            if success:
+                metrics['success_count'] += 1
+            metrics['total_count'] += 1
+            
+            # Calculate cost using formula: base_cost * num_queries * (1.0 + (1.0 - relevance))
+            base_cost = self.base_costs.get(strategy, 1.0)
+            calculated_cost = base_cost * num_queries * (1.0 + (1.0 - relevance))
+            
+            metrics['cost_sum'] += calculated_cost
+            metrics['cost_count'] += 1
+            metrics['last_used'] = datetime.now()
 
-    def get_average_cost(self, strategy: str) -> Dict[str, float]:
-        m = self.metrics.get(strategy)
-        if not m or m['total_queries'] == 0:
-            return {'latency': 0.0, 'success_rate': 0.0, 'cost': 0.0, 'avg_db_calls': 0.0, 'avg_tokens': 0.0}
+    def get_average_latency(self, strategy: str) -> Optional[float]:
+        """Returns average latency for a strategy."""
+        with self._metrics_lock:
+            metrics = self._metrics[strategy]
+            if metrics['latency_count'] > 0:
+                return metrics['latency_sum'] / metrics['latency_count']
+            return None
 
-        total_q = m['total_queries']
-        return {
-            'latency': m['total_latency'] / total_q,
-            'success_rate': m['successful_queries'] / total_q,
-            'cost': m['total_cost'] / total_q,
-            'avg_db_calls': m['total_db_calls'] / total_q,
-            'avg_tokens': m['total_tokens'] / total_q,
-        }
+    def get_success_rate(self, strategy: str) -> Optional[float]:
+        """Returns success rate for a strategy."""
+        with self._metrics_lock:
+            metrics = self._metrics[strategy]
+            if metrics['total_count'] > 0:
+                return metrics['success_count'] / metrics['total_count']
+            return None
 
-    def get_all_costs(self) -> Dict[str, Dict[str, float]]:
-        return {s: self.get_average_cost(s) for s in self.metrics.keys()}
+    def get_average_cost(self, strategy: str) -> Optional[float]:
+        """Returns average cost for a strategy."""
+        with self._metrics_lock:
+            metrics = self._metrics[strategy]
+            if metrics['cost_count'] > 0:
+                return metrics['cost_sum'] / metrics['cost_count']
+            return None
 
-    def get_calibration_state(self) -> dict:
-        return {
-            'db_call_weight': self._db_call_weight,
-            'token_weight': self._token_weight,
-            'latency_weight': self._latency_weight,
-            'strategies': {
-                s: {
-                    'total_queries': m['total_queries'],
-                    'successful_queries': m['successful_queries'],
-                    'total_db_calls': m['total_db_calls'],
-                    'total_tokens': m['total_tokens'],
+    def get_effectiveness_score(self, strategy: str) -> float:
+        """
+        Returns a combined effectiveness score (0.0 to 1.0) based on:
+        - Success rate (higher is better)
+        - Average cost (lower is better)
+        - Recency of usage (more recent is better)
+        
+        Lower score means more effective strategy.
+        """
+        with self._metrics_lock:
+            metrics = self._metrics[strategy]
+            
+            # Get success rate (higher is better)
+            success_rate = self.get_success_rate(strategy) or 0.0
+            
+            # Get average cost (lower is better, normalize to 0-1 scale)
+            avg_cost = self.get_average_cost(strategy)
+            if avg_cost is not None:
+                # Normalize cost to 0-1 scale (assuming max reasonable cost of 5.0)
+                cost_efficiency = max(0.0, min(1.0, (5.0 - avg_cost) / 5.0))
+            else:
+                cost_efficiency = 0.5  # Default if no data
+            
+            # Consider recency (strategies used more recently might be preferred)
+            recency_factor = 1.0
+            if metrics['last_used']:
+                time_since = datetime.now() - metrics['last_used']
+                # Reduce score for strategies not used in last hour
+                if time_since > timedelta(hours=1):
+                    recency_factor = 0.8
+            
+            # Combined score (lower is better)
+            effectiveness = (1.0 - success_rate) * 0.4 + cost_efficiency * 0.6
+            return effectiveness * recency_factor
+
+    def get_all_strategies_ranked(self) -> List[Tuple[str, float]]:
+        """
+        Returns all strategies ranked by effectiveness (best first).
+        """
+        with self._metrics_lock:
+            strategies = []
+            for strategy in self._metrics.keys():
+                score = self.get_effectiveness_score(strategy)
+                strategies.append((strategy, score))
+            
+            # Sort by effectiveness score (lowest first - most effective first)
+            return sorted(strategies, key=lambda x: x[1])
+
+    def get_all_costs(self) -> Dict[str, Dict]:
+        """Returns all cost metrics."""
+        with self._metrics_lock:
+            result = {}
+            for strategy, metrics in self._metrics.items():
+                result[strategy] = {
+                    'average_latency': self.get_average_latency(strategy),
+                    'success_rate': self.get_success_rate(strategy),
+                    'average_cost': self.get_average_cost(strategy),
+                    'total_requests': metrics['total_count'],
+                    'effectiveness_score': self.get_effectiveness_score(strategy)
                 }
-                for s, m in self.metrics.items()
-            },
-        }
+            return result
+
+    def reset_metrics(self):
+        """Resets all metrics."""
+        with self._metrics_lock:
+            self._metrics.clear()
 
 
-if __name__ == "__main__":
-    tracker = CostTracker()
-
-    # Simuliere echte BudgetTracker-Daten statt Zufallszahlen
-    scenarios = {
-        'event_log_first': [
-            {'db_calls': 1, 'estimated_tokens': 150, 'duration_seconds': 0.04},
-            {'db_calls': 1, 'estimated_tokens': 200, 'duration_seconds': 0.06},
-            {'db_calls': 1, 'estimated_tokens': 180, 'duration_seconds': 0.05},
-        ],
-        'hybrid_with_graph_expansion': [
-            {'db_calls': 3, 'estimated_tokens': 450, 'duration_seconds': 0.15},
-            {'db_calls': 4, 'estimated_tokens': 600, 'duration_seconds': 0.22},
-            {'db_calls': 3, 'estimated_tokens': 500, 'duration_seconds': 0.18},
-        ],
-        'knowledge_graph_with_invalidation': [
-            {'db_calls': 5, 'estimated_tokens': 800, 'duration_seconds': 0.35},
-            {'db_calls': 6, 'estimated_tokens': 950, 'duration_seconds': 0.42},
-        ],
-    }
-
-    for strategy, data_list in scenarios.items():
-        for data in data_list:
-            tracker.feed_budget_tracker(strategy, data, success=True)
-
-    print("Vor Kalibrierung:")
-    for s, m in tracker.get_all_costs().items():
-        print(f"  {s}: cost={m['cost']:.3f}, latency={m['latency']:.3f}s, "
-              f"db_calls={m['avg_db_calls']:.1f}, tokens={m['avg_tokens']:.0f}")
-
-    cal = tracker.calibrate()
-    print(f"\nKalibrierung: {cal}")
-
-    print("\nEmpirische Basiskosten:")
-    for s in scenarios:
-        print(f"  {s}: {tracker.get_empirical_base_cost(s):.4f}")
+# Global instance for cross-module access
+cost_tracker = CostTracker()
