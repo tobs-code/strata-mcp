@@ -205,12 +205,16 @@ def _get_groq_key() -> str | None:
     return _GROQ_API_KEY if _GROQ_API_KEY else None
 
 _GROQ_SYSTEM_PROMPT = (
-    "Extract named entities. Return: name | type | confidence\n\n"
-    "Types: person, organization, location, technology, concept, event\n\n"
+    "You are a precise entity extraction system. Identify every specific named entity in the text.\n\n"
+    "OUTPUT FORMAT (one per line): name | type | confidence\n\n"
+    "Valid types: person, organization, location, technology, concept, event\n\n"
     "RULES:\n"
-    "- Extract specific named entities only (companies, products, people, places, benchmarks, laws/acts, dates)\n"
-    "- DO NOT extract: generic job roles (developer, author, engineer, orchestrator), common nouns, measurements, prices, standalone years, single generic words\n"
-    "- Conf 0.9+ for clear names, 0.7-0.8 for borderline"
+    "1. Extract specific named entities: people, companies, products, places, benchmarks, laws/acts, dates\n"
+    "2. Skip generic terms: job roles, common nouns, measurements, prices, standalone years, single generic words\n"
+    "3. Universities, institutes, and colleges are organizations, not locations\n"
+    "4. Generic event descriptions like 'conference' or 'meeting' without a proper name should be skipped\n"
+    "5. Confidence: 0.90-0.99 for clear proper names, 0.70-0.89 when ambiguous or partial\n"
+    "6. Output ONLY the pipe lines — no greetings, no explanations, no markdown"
 )
 
 _GROQ_FEW_SHOT_EXAMPLES = """\
@@ -240,6 +244,7 @@ def extract_entities_with_groq(text: str) -> list[dict]:
         ],
         "temperature": 0.0,
         "max_tokens": 512,
+        "stop": ["\n\n"],
     }
     try:
         resp = requests.post(
@@ -267,6 +272,11 @@ def extract_entities_with_groq(text: str) -> list[dict]:
         etype = parts[1].lower()
         if etype not in {"person", "organization", "location", "technology", "concept", "event"}:
             etype = "concept"
+        # Universities/institutes are organizations, not locations
+        if etype == "location":
+            lower = name.lower()
+            if any(kw in lower for kw in ("university", "institute of technology", "college", "school of", "institut")):
+                etype = "organization"
         conf = 0.7
         if len(parts) >= 3:
             try:
@@ -397,7 +407,31 @@ PREDICATE_MAP = {
     "join": "joined",
     "acquire": "acquired",
     "invest": "invested_in",
+    "locate": "located_in",
+    "hold": "held",
+    "meet": "met_with",
 }
+
+_GROQ_TRIPLE_PROMPT = """You are a precise relationship extraction system. Extract every explicit subject-verb-object relationship from the text.
+
+OUTPUT FORMAT (one per line): subject | predicate | object | confidence
+
+Valid predicates: works_at, founded, developed, created, uses, built, leads, wrote, published, implemented, designed, manages, joined, acquired, invested_in, met_with, held, located_in, related_to
+
+RULES:
+1. Subject and object MUST be specific named entities (people, organizations, products, places, events)
+2. Never use generic nouns: paper, study, company, report, system, product, research, analysis
+3. Map the text verb to the closest predicate; if none matches use related_to
+4. Extract every explicit relationship — do not skip any
+5. Output ONLY the pipe-delimited lines — no introductions, no explanations, no markdown"""
+
+_GROQ_TRIPLE_EXAMPLES = [
+    ("Sam Altman founded OpenAI.", "Sam Altman | founded | OpenAI | 0.99"),
+    ("Microsoft acquired Activision Blizzard.", "Microsoft | acquired | Activision Blizzard | 0.99"),
+    ("Elon Musk leads Tesla and SpaceX.", "Elon Musk | leads | Tesla | 0.99\nElon Musk | leads | SpaceX | 0.99"),
+    ("Satya Nadella is CEO of Microsoft. He met with Sundar Pichai at Davos.", "Satya Nadella | works_at | Microsoft | 0.99\nSatya Nadella | met_with | Sundar Pichai | 0.99"),
+    ("Apple held WWDC 2026 at Apple Park.", "Apple | held | WWDC 2026 | 0.99\nWWDC 2026 | located_in | Apple Park | 0.8"),
+]
 
 def findSVOs(doc):
     """Extract Subject-Verb-Object triples from spaCy doc using dependency parsing."""
@@ -438,12 +472,11 @@ def findSVOs(doc):
     return svos
 
 
-def extract_triples(text: str) -> list[dict]:
+def extract_triples_with_spacy(text: str) -> list[dict]:
     """Extract SVO triples from text using spaCy dependency parsing."""
     nlp = _get_nlp()
     
     if nlp is None:
-        # If spaCy is not available, return empty list
         return []
     
     doc = nlp(text)
@@ -451,16 +484,13 @@ def extract_triples(text: str) -> list[dict]:
     triples = []
     
     for subj, verb, obj in svos:
-        # Map verb to predicate
         predicate = PREDICATE_MAP.get(verb, "related_to")
         
-        # Get embedding similarity as confidence measure
         try:
             emb_service = get_embedding_service()
             subj_emb = emb_service.embed_for_storage(subj)
             obj_emb = emb_service.embed_for_storage(obj)
             
-            # Calculate cosine similarity
             dot_product = sum(a * b for a, b in zip(subj_emb, obj_emb))
             norm_a = sum(a * a for a in subj_emb) ** 0.5
             norm_b = sum(b * b for b in obj_emb) ** 0.5
@@ -468,15 +498,12 @@ def extract_triples(text: str) -> list[dict]:
             if norm_a > 0 and norm_b > 0:
                 confidence = dot_product / (norm_a * norm_b)
             
-            # Cap confidence to reasonable range
             confidence = max(0.0, min(1.0, confidence))
             
-            # Check ontology constraints
             subj_type = infer_entity_type(subj)
             obj_type = infer_entity_type(obj)
             
             if not validate_predicate(subj_type, predicate, obj_type):
-                # Fallback to generic relation if ontology constraint violated
                 predicate = "related_to"
             
             triples.append({
@@ -486,7 +513,6 @@ def extract_triples(text: str) -> list[dict]:
                 "confidence": confidence
             })
         except:
-            # If embedding calculation fails, use medium confidence
             triples.append({
                 "subject": subj,
                 "predicate": predicate,
@@ -495,6 +521,91 @@ def extract_triples(text: str) -> list[dict]:
             })
     
     return triples
+
+
+_GROQ_GENERIC_OBJECTS = {
+    "paper", "study", "company", "report", "system", "product",
+    "research", "analysis", "article", "document", "book", "chapter",
+    "section", "page", "data", "information", "work", "project",
+    "service", "platform", "tool", "application", "software", "hardware",
+    "model", "algorithm", "method", "approach", "technique", "framework",
+    "version", "release", "update", "patch", "build", "code", "website",
+    "site", "page", "file", "document", "image", "video", "audio",
+}
+
+def extract_triples_with_groq(text: str) -> list[dict]:
+    key = _get_groq_key()
+    if not key:
+        return []
+
+    messages = [{"role": "system", "content": _GROQ_TRIPLE_PROMPT}]
+    for user_text, assistant_text in _GROQ_TRIPLE_EXAMPLES:
+        messages.append({"role": "user", "content": user_text})
+        messages.append({"role": "assistant", "content": assistant_text})
+    messages.append({"role": "user", "content": text})
+
+    try:
+        resp = requests.post(
+            "https://api.groq.com/openai/v1/chat/completions",
+            json={
+                "model": "llama-3.1-8b-instant",
+                "messages": messages,
+                "temperature": 0.0,
+                "max_tokens": 512,
+                "stop": ["\n\n"],
+            },
+            headers={"Authorization": f"Bearer {key}"},
+            timeout=30,
+        )
+        resp.raise_for_status()
+        content = resp.json()["choices"][0]["message"]["content"]
+    except Exception:
+        return []
+
+    triples = []
+    seen = set()
+    for line in content.split("\n"):
+        line = line.strip()
+        if "|" not in line:
+            continue
+        parts = [p.strip() for p in line.split("|")]
+        if len(parts) < 3:
+            continue
+        subj, predicate, obj = parts[0], parts[1].lower(), parts[2]
+        if len(subj) < 2 or len(obj) < 2:
+            continue
+        if obj.lower() in _GROQ_GENERIC_OBJECTS:
+            continue
+        conf = 0.7
+        if len(parts) >= 4:
+            try:
+                conf = min(1.0, max(0.0, float(parts[3])))
+            except ValueError:
+                pass
+        key = f"{subj.lower()}|{predicate}|{obj.lower()}"
+        if key in seen:
+            continue
+        seen.add(key)
+        triples.append({
+            "subject": subj,
+            "predicate": predicate,
+            "object": obj,
+            "confidence": conf,
+        })
+    return triples
+
+
+def extract_triples(text: str) -> list[dict]:
+    method = os.getenv("EXTRACTION_METHOD", "auto")
+    if method == "groq":
+        triples = extract_triples_with_groq(text)
+        if triples:
+            return triples
+    if method in ("groq", "auto"):
+        triples = extract_triples_with_groq(text)
+        if triples:
+            return triples
+    return extract_triples_with_spacy(text)
 
 
 # Cache for embedding calculations

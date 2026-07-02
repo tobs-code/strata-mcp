@@ -52,7 +52,7 @@ Strata is a agent memory system that intelligently classifies, routes, plans, an
 
 | Component | Path | Description |
 |-----------|------|-------------|
-| **MCP Server** | `src/mcp/server.py` | Control plane (Anthropic MCP protocol) — stdio mode |
+| **MCP Server** | `src/mcp/server.py` | Control plane (Anthropic MCP protocol) — stdio mode. 10 tools: `memory_store`, `memory_query`, `memory_update`, `memory_forget`, `memory_consolidate`, `event_log_search`, `kg_query`, `semantic_search`, `memory_stats`, `explain_routing` |
 | **Extraction** | `src/extraction/` | Entropy-gated entity extraction with Groq API (llama-3.1-8b-instant) or spaCy fallback. Pipe-separated LLM prompt, type preservation |
 | **Router** | `src/router/` | Policy engine & cost tracking |
 | **Planner** | `src/planner/` | Execution engine |
@@ -66,7 +66,8 @@ Strata is a agent memory system that intelligently classifies, routes, plans, an
 - **Adaptive Retrieval** — Strategy selection per query type (event log, KG, hybrid BM25+vector+temporal)
 - **Entropy Gating** — LightMem-style composite score: Shannon character entropy + embedding novelty. Raw Event Log is always append-only; the gate decides only whether to extract into the Knowledge Graph.
 - **Entity Extraction** — Groq API (`llama-3.1-8b-instant`) with spaCy fallback. Pipe-separated LLM prompt, type preservation (LLM classification preferred over heuristic).
-- **Logical Invalidation** — `valid_until` timestamps instead of hard deletes
+- **Logical Invalidation** — `valid_until` timestamps instead of hard deletes. `memory_update` auto-creates target entities if they don't exist yet.
+- **Forgetting & Consolidation** — `memory_forget` soft-deletes events or entities; `memory_consolidate` triggers maintenance runs (with optional physical stale-fact removal).
 - **Cross-Language Consistency** — Identical classification & routing logic in Rust and Python
 - **Cost Awareness** — Tracks & budgets resource consumption per strategy
 
@@ -118,17 +119,17 @@ cd src/mcp && python server.py
 
 Strata has an integrated benchmark system to measure tool latency. Results are automatically logged to `benchmarks/benchmark_results.md`.
 
-### Tool Performance (as of July 2026)
+### Tool Performance (as of July 2026, warm SurrealDB, CPU-only embeddings)
 
-| Tool | Average (ms) | P95 (ms) | Optimization |
-|------|--------------|----------|--------------|
-| `memory_stats` | 91.14 | 101.47 | Multi-Statement Batching + Shared HTTP Client |
-| `memory_store` | 227.87 | 251.02 | Embeddings CUDA-accelerated |
-| `memory_query` | 401.48 | 431.50 | Hybrid Retrieval |
-| `semantic_search` | 73.22 | 76.46 | Shared HTTP Client + Embedding Cache |
-| `event_log_search` | 95.75 | 107.44 | Hybrid FTX+Vector (RRF) + Shared HTTP Client |
-| `kg_query` | 49.01 | 57.19 | Shared HTTP Client |
-| `explain_routing` | 0.19 | 0.23 | Pure Logic |
+| Tool | Average (ms) | P95 (ms) | Notes |
+|------|--------------|----------|-------|
+| `memory_stats` | ~790 | ~860 | Multi-statement batch query |
+| `memory_store` | ~228 | ~254 | SentenceTransformers (CPU); first call ~800ms (cold model load) |
+| `memory_query` | ~405 | ~435 | Hybrid retrieval (classify → plan → execute) |
+| `semantic_search` | ~800 | ~875 | Embedding + HNSW vector search |
+| `event_log_search` | ~760 | ~810 | Hybrid FTX+Vector (RRF) |
+| `kg_query` | ~760 | ~800 | SurrealDB graph traversal |
+| `explain_routing` | ~0.20 | ~0.23 | Pure in-process logic |
 
 ### Run Benchmarks
 

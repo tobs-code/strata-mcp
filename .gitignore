@@ -24,6 +24,7 @@ Thumbs.db
 
 # Unused / archived files (not deleted, just excluded from version control)
 /_unused/
+/surreal_official_mcp/
 
 # Project specific
 *.log

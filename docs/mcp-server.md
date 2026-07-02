@@ -237,7 +237,7 @@ Updates a fact in the Knowledge Graph through logical invalidation. The old fact
 }
 ```
 
-**Note:** Subject and object must already exist as entities. Automatic entity creation is not performed.
+**Note:** If the target entity does not exist yet, it will be created automatically with an inferred type.
 
 ---
 
@@ -599,8 +599,7 @@ The HNSW index `event_embedding_vec` is defined on the `embedding` field with `D
 1. **SurrealDB runs in-memory:** `docker-compose down` deletes all data. For persistence, enable the `surrealdb-data` volume in `docker-compose.yml` (already configured).
 2. **Embedding computation on `memory_store`:** The model is loaded on first call (lazy). For high throughput, a persistently loaded service should be used.
 3. **No Auth Layer on the MCP Server:** The MCP server itself has no authentication. Access control must be configured at the transport level (e.g. local socket) or in the client.
-4. **`memory_update` does not create entities automatically:** Subject and object must already exist as entities, otherwise the operation fails.
-5. **`event_log_search` is limited to 4× `limit` candidates per sub-search (FTX and vector):** For very large event logs, this may miss relevant results. Increase via `fn:` extensions if needed.
+4. **`event_log_search` is limited to 4× `limit` candidates per sub-search (FTX and vector):** For very large event logs, this may miss relevant results. Increase via `fn:` extensions if needed.
 
 ---
 
@@ -630,4 +629,4 @@ The HNSW index `event_embedding_vec` is defined on the `embedding` field with `D
 - [ ] Batch `memory_store` for bulk ingestion
 - [ ] Streaming responses for large retrieval results
 - [ ] Connect eval harness to MCP tools
-- [ ] Automatic entity creation in `memory_update`
+

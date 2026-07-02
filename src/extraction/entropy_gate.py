@@ -42,16 +42,22 @@ class EntropyGateConfig:
         self,
         alpha: float = 0.35,       # Gewicht Text-Entropy
         beta: float = 0.65,        # Gewicht Embedding-Novelty
-        threshold: float = 0.55,   # Initialer Default; TODO per gate_log kalibrieren
+        base_threshold: float = 0.30,  # Minimum threshold (cold start)
+        max_threshold: float = 0.55,   # Maximum threshold (mature DB)
+        ramp_events: int = 150,        # Events needed to reach max_threshold
         min_length: int = 10,      # Unter X Zeichen immer skippen
+        min_diversity: float = 0.15,   # Anteil unique chars; repetitive Texte darunter skippen
         max_length: int = 1000,    # Über X Zeichen immer skippen
         max_entities_for_cooccurrence: int = 6  # Obergrenze gegen kombinatorische Explosion
     ):
         self.alpha = alpha
         self.beta = beta
-        self.threshold = threshold
+        self.base_threshold = base_threshold
+        self.max_threshold = max_threshold
+        self.ramp_events = ramp_events
         self.min_length = min_length
         self.max_length = max_length
+        self.min_diversity = min_diversity
         self.max_entities_for_cooccurrence = max_entities_for_cooccurrence
 
 
@@ -176,6 +182,37 @@ class EntropyGate:
         # Return inverse (novelty = 1 - similarity)
         return 1.0 - max(0.0, min(1.0, avg_similarity))
 
+    def _count_events(self) -> int:
+        """Count total stored events (for adaptive threshold)."""
+        try:
+            sql = "SELECT count() AS c FROM event WHERE (forgotten IS NONE OR forgotten = false) LIMIT 1;"
+            result = self._query_surreal(sql)
+            rows = self._extract_result(result)
+            if rows:
+                return rows[0].get("c", 0)
+        except Exception:
+            pass
+        return 0
+
+    def _get_adaptive_threshold(self) -> float:
+        """Threshold steigt linear von base_threshold → max_threshold mit der Event-Anzahl."""
+        n = self._count_events()
+        bt = self.config.base_threshold
+        mt = self.config.max_threshold
+        ramp = self.config.ramp_events
+        if ramp <= 0:
+            return mt
+        fraction = min(n / ramp, 1.0)
+        return bt + (mt - bt) * fraction
+
+    @staticmethod
+    def _character_diversity(text: str) -> float:
+        """Anteil unique chars: len(set(text)) / len(text). < 0.30 = repetitive."""
+        if not text:
+            return 0.0
+        unique = len(set(text.lower()))
+        return unique / len(text)
+
     def should_extract(self, text: str) -> Dict[str, Any]:
         """
         Entscheidet basierend auf Composite-Score ob Text in KG extrahiert werden soll
@@ -195,6 +232,16 @@ class EntropyGate:
                 "max_length": self.config.max_length
             }
         
+        # Diversity-Check: repetitive Texte (z.B. "aaa...", "test test...") skippen
+        diversity = self._character_diversity(text)
+        if diversity < self.config.min_diversity:
+            return {
+                "decision": "skip",
+                "reason": "too_repetitive",
+                "character_diversity": diversity,
+                "threshold": self.config.min_diversity
+            }
+        
         # Calculate individual scores
         text_entropy = self.calculate_char_entropy(text)
         novelty = self.calculate_novelty(text)
@@ -205,8 +252,11 @@ class EntropyGate:
         # Calculate composite score
         composite_score = (self.config.alpha * normalized_entropy) + (self.config.beta * novelty)
         
+        # Adaptive threshold based on DB maturity
+        threshold = self._get_adaptive_threshold()
+        
         # Make decision
-        decision = "extract" if composite_score >= self.config.threshold else "ignore"
+        decision = "extract" if composite_score >= threshold else "ignore"
         
         # Log decision to database
         self._log_decision(text, normalized_entropy, novelty, composite_score, decision)
@@ -217,10 +267,10 @@ class EntropyGate:
             "normalized_entropy": normalized_entropy,
             "novelty": novelty,
             "composite_score": composite_score,
-            "threshold": self.config.threshold,
+            "threshold": threshold,
             "alpha": self.config.alpha,
             "beta": self.config.beta,
-            "reason": f"Composite score {composite_score:.3f} {'meets' if decision == 'extract' else 'does not meet'} threshold {self.config.threshold:.3f}"
+            "reason": f"Composite score {composite_score:.3f} {'meets' if decision == 'extract' else 'does not meet'} threshold {threshold:.3f}"
         }
 
     def _log_decision(self, text: str, entropy: float, novelty: float, composite_score: float, decision: str):
@@ -367,14 +417,21 @@ class EntropyGate:
                 embedding = {embedding_str};
             """
         except Exception:
-            # If embedding fails, create entity without embedding
-            create_sql = f"""
-            CREATE entity SET 
-                name = '{name_escaped}',
-                type = '{entity_type}';
-            """
+            create_sql = None
         
-        result = self._query_surreal(create_sql)
+        if create_sql:
+            result = self._query_surreal(create_sql)
+            entity_result = self._extract_result(result)
+            if entity_result and len(entity_result) > 0:
+                return entity_result[0].get("id")
+        
+        # Fallback: create entity without embedding
+        fallback_sql = f"""
+        CREATE entity SET 
+            name = '{name_escaped}',
+            type = '{entity_type}';
+        """
+        result = self._query_surreal(fallback_sql)
         entity_result = self._extract_result(result)
         if entity_result and len(entity_result) > 0:
             return entity_result[0].get("id")

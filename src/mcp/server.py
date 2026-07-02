@@ -606,12 +606,15 @@ async def _store_content(content: str, source: str = "user_input", debug: bool =
 
     from src.extraction.entropy_gate import EntropyGate
     gate = EntropyGate()
+    # Quick gate check for the response (ingest() calls should_extract internally too)
+    gate_result = gate.should_extract(content)
     event_id = await asyncio.to_thread(gate.ingest, content, source, debug)
 
     if event_id is None:
         return {"event_id": None, "status": "error", "source": source,
                 "message": "storage failed – event could not be persisted"}
-    return {"event_id": event_id, "status": "stored", "source": source, "gate": "active"}
+    return {"event_id": event_id, "status": "stored", "source": source,
+            "gate": gate_result.get("decision", "active")}
 
 
 async def _execute_query(query: str, cost_budget: str = "auto") -> dict:
@@ -739,15 +742,38 @@ async def memory_query(query: str, cost_budget: str = "auto") -> dict:
     return await _execute_query(query, cost_budget)
 
 
+async def _get_or_create_entity(name: str) -> Optional[str]:
+    """Find an entity by name or create it with inferred type. Returns entity ID or None."""
+    name_escaped = escape_surrealql(name)
+    sql = f"SELECT id FROM entity WHERE name = '{name_escaped}' LIMIT 1;"
+    result = await _query_surreal(sql)
+    entities = _extract_result(result, 1)
+    if entities:
+        return entities[0]["id"]
+
+    entity_type = infer_entity_type(name)
+    create_sql = f"CREATE entity SET name = '{name_escaped}', type = '{entity_type}';"
+    create_result = await _query_surreal(create_sql)
+    created = _extract_result(create_result, 1)
+    if created:
+        return created[0]["id"]
+    return None
+
+
 @mcp.tool()
 async def memory_update(subject: str, predicate: str, new_value: str) -> dict:
     """Updates a fact in the KG via logical invalidation. Old fact gets valid_until, new fact created.
-    Automatically infers entity types (e.g., 'organization' for companies/projects, otherwise 'concept') if entities are auto-created.
+    If the target entity does not exist yet, it will be created automatically."""
+    subject_id = await _get_or_create_entity(subject)
+    if not subject_id:
+        return {"status": "error", "message": f"Subject entity '{subject}' does not exist and could not be created"}
 
-    Note: new_value must be an existing entity name in the KG (not a free-text value)."""
+    object_id = await _get_or_create_entity(new_value)
+    if not object_id:
+        return {"status": "error", "message": f"Object entity '{new_value}' does not exist and could not be created"}
+
     subject_escaped = escape_surrealql(subject)
     predicate_escaped = escape_surrealql(predicate)
-    new_value_escaped = escape_surrealql(new_value)
 
     find_sql = f"""
     SELECT * FROM fact
@@ -766,42 +792,29 @@ async def memory_update(subject: str, predicate: str, new_value: str) -> dict:
         await _query_surreal(invalidate_sql)
         invalidated = old_fact_id
     else:
+        related_sql = f"""
+        SELECT predicate, out.name AS value, out.type AS value_type FROM fact
+        WHERE in.name = '{subject_escaped}'
+          AND valid_until = NONE;
+        """
+        related_result = await _query_surreal(related_sql)
+        related_facts = _extract_result(related_result, 1)
         return {
             "status": "error",
-            "message": f"No existing fact found for subject='{subject}', predicate='{predicate}'",
+            "message": f"No active fact found for subject='{subject}', predicate='{predicate}'",
+            "existing_facts_for_subject": [
+                {"predicate": f["predicate"], "value": f.get("value")}
+                for f in related_facts
+            ] if related_facts else [],
         }
 
-    subject_sql = f"SELECT id FROM entity WHERE name = '{subject_escaped}' LIMIT 1;"
-    subject_result = await _query_surreal(subject_sql)
-    subject_entities = _extract_result(subject_result, 1)
-
-    if not subject_entities:
-        return {
-            "status": "error",
-            "message": f"Subject entity '{subject}' does not exist",
-        }
-
-    object_sql = f"SELECT id FROM entity WHERE name = '{new_value_escaped}' LIMIT 1;"
-    object_result = await _query_surreal(object_sql)
-    object_entities = _extract_result(object_result, 1)
-
-    if not object_entities:
-        return {
-            "status": "error",
-            "message": f"Object entity '{new_value}' does not exist",
-        }
-
-    new_fact_id = None
-    if subject_entities and object_entities:
-        subject_id = subject_entities[0]["id"]
-        object_id = object_entities[0]["id"]
-        relate_sql = f"RELATE {subject_id}->fact->{object_id} SET predicate = '{predicate_escaped}', confidence = 1.0;"
-        relate_result = await _query_surreal(relate_sql)
-        new_fact = _extract_result(relate_result, 1)
-        if new_fact:
-            new_fact_id = new_fact[0]["id"]
+    relate_sql = f"RELATE {subject_id}->fact->{object_id} SET predicate = '{predicate_escaped}', confidence = 1.0;"
+    relate_result = await _query_surreal(relate_sql)
+    new_fact = _extract_result(relate_result, 1)
+    new_fact_id = new_fact[0]["id"] if new_fact else None
 
     return {
+        "status": "ok",
         "invalidated_fact": invalidated,
         "new_fact": new_fact_id,
         "subject": subject,
