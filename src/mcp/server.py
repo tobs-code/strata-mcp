@@ -322,7 +322,15 @@ def _budget_aware_should_retry(sql: str) -> bool:
     return 2 if heavy else 3
 
 
-async def _query_surreal(sql: str) -> Any:
+async def _query_surreal(sql: str, params: Optional[Dict[str, Any]] = None) -> Any:
+    """Execute SurrealQL — with optional parameters (like prepared statements).
+    
+    When params is provided, uses JSON body with SurrealDB's parameterized query API:
+        sql = "CREATE entity SET name = $name"
+        params = {"name": "Tobias"}
+    
+    This avoids string injection and escaping issues.
+    """
     global \
         _surreal_failure_count, \
         _surreal_circuit_open, \
@@ -337,11 +345,23 @@ async def _query_surreal(sql: str) -> Any:
                 asyncio.create_task(_background_reconnect_task())
                 _reconnect_task_started = True
 
-    headers = {
-        "Accept": "application/json",
-        "Content-Type": "text/plain",
-    }
-    full_sql = f"USE NS {SURREAL_NS} DB {SURREAL_DB};\n{sql}"
+    if params:
+        headers = {
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+        }
+        body_dict: Dict[str, Any] = {"sql": sql}
+        # Inject namespace + db via params (SurrealDB 2.x supports $ns, $db)
+        body_dict["params"] = dict(params)
+        body = json.dumps(body_dict)
+        full_sql = sql  # USE NS/DB can be omitted when using params with ns/db
+    else:
+        headers = {
+            "Accept": "application/json",
+            "Content-Type": "text/plain",
+        }
+        body = f"USE NS {SURREAL_NS} DB {SURREAL_DB};\n{sql}"
+        full_sql = body
 
     # Read circuit state without holding lock while query runs
     async with _surreal_lock:
@@ -366,13 +386,22 @@ async def _query_surreal(sql: str) -> Any:
     client = await _get_client()
     for attempt in range(max_retries):
             try:
-                response = await client.post(
-                    SURREAL_URL,
-                    content=full_sql,
-                    headers=headers,
-                    auth=SURREAL_AUTH,
-                    timeout=30.0,
-                )
+                if isinstance(body, str):
+                    response = await client.post(
+                        SURREAL_URL,
+                        content=body,
+                        headers=headers,
+                        auth=SURREAL_AUTH,
+                        timeout=30.0,
+                    )
+                else:
+                    response = await client.post(
+                        SURREAL_URL,
+                        json=json.loads(body) if isinstance(body, str) else None,
+                        headers=headers,
+                        auth=SURREAL_AUTH,
+                        timeout=30.0,
+                    )
                 if response.status_code >= 400:
                     error_msg = response.text
                     print(
@@ -1100,16 +1129,43 @@ async def kg_query(
     return await _execute_kg_query(subject, predicate, at_time, limit)
 
 
+def _character_diversity(text: str) -> float:
+    """Anteil unique chars: len(set(text)) / len(text). < 0.15 = repetitive noise."""
+    if not text:
+        return 0.0
+    unique = len(set(text.lower()))
+    return unique / len(text)
+
+
+def _is_highly_repetitive(text: str) -> bool:
+    """Erkennt repetitive/noise content wie 'test test test test test' or 'ab ab ab ab ab'.
+    Prüft character_diversity (< 0.20) und zusätzlich die Wort-Wiederholungsrate."""
+    if not text or len(text) < 5:
+        return False
+    div = _character_diversity(text)
+    # Character-Diversity: "test test test test test" -> 4/24 = 0.167 < 0.20 ✓
+    if div < 0.20:
+        return True
+    # Word-Repetition: zählt unique words / total words
+    words = text.lower().split()
+    if len(words) >= 3:
+        unique_words = len(set(words))
+        word_ratio = unique_words / len(words)
+        if word_ratio < 0.3:
+            return True
+    return False
+
+
 @mcp.tool()
 async def semantic_search(query: str, top_k: int = 5) -> dict:
-    """Pure vector search without KG."""
+    """Pure vector search without KG. Filters out highly repetitive/noise content."""
     embedding_service = get_embedding_service()
     query_vector = await _embed_query(query)
 
     query_vector_str = "[" + ", ".join(map(str, query_vector)) + "]"
 
-    # Use SurrealDB's native vector::similarity::cosine function
-    # We add a dimension check to avoid errors if some events have different embedding sizes
+    # Fetch extra candidates to allow post-filtering
+    fetch_k = min(top_k * 4, 100)
     sql = f"""
     SELECT id, content, vector::similarity::cosine(embedding, {query_vector_str}) AS score
     FROM event
@@ -1117,15 +1173,28 @@ async def semantic_search(query: str, top_k: int = 5) -> dict:
       AND (forgotten IS NONE OR forgotten = false)
       AND array::len(embedding) = {len(query_vector)}
     ORDER BY score DESC
-    LIMIT {top_k};
+    LIMIT {fetch_k};
     """
     result = await _query_surreal(sql)
-    events = _extract_result(result, 1)
+    raw_events = _extract_result(result, 1)
 
-    # Clean the output (remove embedding field if present)
-    clean_events = [_clean_output(event) for event in events]
+    # Post-filter: penalize highly repetitive content by re-weighting its score
+    scored = []
+    for ev in raw_events:
+        content = ev.get("content", "")
+        score = ev.get("score", 0)
+        if not isinstance(score, (int, float)):
+            score = 0.0
+        if _is_highly_repetitive(content):
+            # Heavily penalise but don't remove entirely — allows real matches to dominate
+            score = score * 0.02
+        scored.append((score, ev))
 
-    return {"events": clean_events, "count": len(clean_events)}
+    # Re-sort and take top_k
+    scored.sort(key=lambda x: x[0], reverse=True)
+    events = [_clean_output(ev) for _, ev in scored[:top_k]]
+
+    return {"events": events, "count": len(events)}
 
 
 # =============================================================================
@@ -1135,7 +1204,7 @@ async def semantic_search(query: str, top_k: int = 5) -> dict:
 
 @app.post("/memory/semantic_search")
 async def semantic_search_endpoint(request_data: dict):
-    """Pure vector search without KG."""
+    """Pure vector search without KG. Filters out highly repetitive/noise content."""
     query = request_data.get("query", "")
     top_k = request_data.get("top_k", 5)
 
@@ -1144,8 +1213,8 @@ async def semantic_search_endpoint(request_data: dict):
 
     query_vector_str = "[" + ", ".join(map(str, query_vector)) + "]"
 
-    # Use SurrealDB's native vector::similarity::cosine function
-    # We add a dimension check to avoid errors if some events have different embedding sizes
+    # Fetch extra candidates to allow post-filtering
+    fetch_k = min(top_k * 4, 100)
     sql = f"""
     SELECT id, content, vector::similarity::cosine(embedding, {query_vector_str}) AS score
     FROM event
@@ -1153,15 +1222,27 @@ async def semantic_search_endpoint(request_data: dict):
       AND (forgotten IS NONE OR forgotten = false)
       AND array::len(embedding) = {len(query_vector)}
     ORDER BY score DESC
-    LIMIT {top_k};
+    LIMIT {fetch_k};
     """
     result = await _query_surreal(sql)
-    events = _extract_result(result, 1)
+    raw_events = _extract_result(result, 1)
 
-    # Clean the output (remove embedding field if present)
-    clean_events = [_clean_output(event) for event in events]
+    # Post-filter: penalize highly repetitive content by re-weighting its score
+    scored = []
+    for ev in raw_events:
+        content = ev.get("content", "")
+        score = ev.get("score", 0)
+        if not isinstance(score, (int, float)):
+            score = 0.0
+        if _is_highly_repetitive(content):
+            score = score * 0.02
+        scored.append((score, ev))
 
-    return {"events": clean_events, "count": len(clean_events)}
+    # Re-sort and take top_k
+    scored.sort(key=lambda x: x[0], reverse=True)
+    events = [_clean_output(ev) for _, ev in scored[:top_k]]
+
+    return {"events": events, "count": len(events)}
 
 
 @mcp.tool()
@@ -1451,6 +1532,171 @@ async def memory_consolidate(
         "error": "Invalid scope. Use 'local' or 'entity' with entity name.",
         "scope": scope,
     }
+
+
+# =============================================================================
+# Schicht 5 - MCP Resources (statische + dynamische)
+# =============================================================================
+
+
+@mcp.resource("strata://stats", description="Memory system statistics")
+async def strata_stats_resource() -> str:
+    """Returns memory statistics as a resource."""
+    return json.dumps(await memory_stats(), indent=2)
+
+
+@mcp.resource("strata://events/recent", description="Most recent events in the event log")
+async def strata_recent_events_resource() -> str:
+    """Returns the 10 most recent non-forgotten events."""
+    sql = "SELECT id, content, timestamp, source FROM event WHERE (forgotten IS NONE OR forgotten = false) ORDER BY timestamp DESC LIMIT 10;"
+    result = await _query_surreal(sql)
+    events = _extract_result(result, 1)
+    return json.dumps({"events": _clean_output(events), "count": len(events)}, indent=2)
+
+
+@mcp.resource("strata://schema", description="Current database schema overview")
+async def strata_schema_resource() -> str:
+    """Returns the database schema: tables, fields, indexes."""
+    sql = "INFO FOR DB;"
+    result = await _query_surreal(sql)
+    info = _extract_result(result, 1)
+    return json.dumps({"schema": _clean_output(info[0]) if info else {}}, indent=2)
+
+
+@mcp.resource("strata://tables", description="List all tables with record counts")
+async def strata_tables_resource() -> str:
+    """Returns all tables and their record counts."""
+    tables_sql = "INFO FOR DB;"
+    result = await _query_surreal(tables_sql)
+    info = _extract_result(result, 1)
+    tables = list(info[0].get("tables", {}).keys()) if info else []
+    table_info = []
+    for table in tables:
+        try:
+            count_result = await _query_surreal(f"SELECT count() AS count FROM {table} GROUP ALL;")
+            count_data = _extract_result(count_result, 1)
+            count_val = count_data[0].get("count", 0) if count_data else 0
+            table_info.append({"name": table, "count": count_val})
+        except Exception:
+            table_info.append({"name": table, "count": -1})
+    return json.dumps({"tables": table_info}, indent=2)
+
+
+# =============================================================================
+# Schicht 6 - MCP Prompts
+# =============================================================================
+
+
+@mcp.prompt(
+    "memory-workflow",
+    description="Guide: How to use STRATA memory tools — store, query, forget, consolidate"
+)
+async def memory_workflow_prompt() -> list:
+    return [
+        {
+            "role": "user",
+            "prompt": (
+                "## STRATA Memory Workflow\n\n"
+                "You have access to a STRATA memory server with the following tools:\n\n"
+                "### Storage\n"
+                "- **memory_store(content, source, metadata)** — Stores a new event. "
+                "Runs through EntropyGate which decides if KG extraction is needed. "
+                "Use this for any factual information you want to persist.\n\n"
+                "### Retrieval\n"
+                "- **memory_query(query, cost_budget)** — Full pipeline: classify → route → retrieve. "
+                "Returns entities, facts, and events. Use for natural language questions.\n"
+                "- **event_log_search(query, since, until, limit)** — Direct hybrid search (BM25 + vector + RRF). "
+                "Best for timeline queries.\n"
+                "- **semantic_search(query, top_k)** — Pure vector search. Best for similarity matching.\n"
+                "- **kg_query(subject, predicate, at_time, limit)** — Knowledge graph traversal. "
+                "Best for structured fact lookups.\n\n"
+                "### Maintenance\n"
+                "- **memory_forget(event_id, entity, reason)** — Soft-deletes a memory.\n"
+                "- **memory_consolidate(scope, entity, delete_stale)** — Cleans up stale facts.\n\n"
+                "### Insights\n"
+                "- **memory_stats()** — System statistics.\n"
+                "- **explain_routing(query)** — Explains routing decisions.\n\n"
+                "### Best Practices\n"
+                "1. Always use **English content** for storage (German causes noisy entity extraction)\n"
+                "2. Use **memory_query** for complex questions (uses hybrid strategy)\n"
+                "3. Use **kg_query** for structured relationship lookups\n"
+                "4. Use **semantic_search** for finding similar content\n"
+                "5. Use **event_log_search** for time-based queries\n"
+                "6. Clean up test data with **memory_forget** + reason\n\n"
+                "### Example: Storing and retrieving user info\n"
+                "1. `memory_store(content=\"The user is named Alice.\", source=\"conversation\")`\n"
+                "2. `memory_query(query=\"What is the user's name?\")`\n"
+                "3. `kg_query(subject=\"Alice\")` → see structured facts\n"
+            )
+        }
+    ]
+
+
+@mcp.prompt(
+    "kg-exploration",
+    description="Guide: How to explore the Knowledge Graph — entities, facts, relations"
+)
+async def kg_exploration_prompt() -> list:
+    return [
+        {
+            "role": "user",
+            "prompt": (
+                "## Knowledge Graph Exploration\n\n"
+                "STRATA maintains a knowledge graph with:\n"
+                "- **Entities** (people, organizations, concepts, technologies)\n"
+                "- **Facts** (relationships between entities with predicate + confidence)\n"
+                "- **Events** (source records with timestamps)\n\n"
+                "### Query Tools\n"
+                "- **kg_query(subject)** — Find all facts connected to a subject\n"
+                "- **kg_query(subject, predicate)** — Filter by relationship type\n"
+                "- **kg_query(subject, predicate, limit=N)** — Control result count\n\n"
+                "### Predicate Types\n"
+                "| Predicate | Confidence | Description |\n"
+                "|-----------|-----------|-------------|\n"
+                "| `mentions` | 0.80 | Explicit mention in source text |\n"
+                "| `works_on` | 0.99 | SVO-extracted: subject works on object |\n"
+                "| `co_occurs_with` | 0.50-0.85 | Same sentence proximity |\n"
+                "| `weakly_related` | 0.30-0.50 | Low embedding similarity |\n"
+                "| `created` | >0.85 | SVO: subject created object |\n"
+                "| `located_in` | — | SVO: subject located in object |\n\n"
+                "### Example Workflow\n"
+                "1. `kg_query(subject=\"Tobias\")` → finds person entity\n"
+                "2. `kg_query(subject=\"Tobias\", predicate=\"works_on\")` → specific relation\n"
+                "3. `event_log_search(query=\"Tobias\")` → find source events\n"
+                "4. `semantic_search(query=\"Tobias\")` → find similar content\n"
+            )
+        }
+    ]
+
+
+@mcp.prompt(
+    "dba-tools",
+    description="Guide: Direct database access — query, select, create, update, delete records"
+)
+async def dba_tools_prompt() -> list:
+    return [
+        {
+            "role": "user",
+            "prompt": (
+                "## Direct Database Access\n\n"
+                "STRATA also provides raw SurrealDB access via the REST API "
+                "(not MCP tools — use HTTP endpoints):\n\n"
+                "### Available Endpoints\n"
+                "- `POST /memory/store` — Store an event\n"
+                "- `POST /memory/query` — Natural language query\n"
+                "- `POST /memory/semantic_search` — Pure vector search\n"
+                "- `POST /memory/stats` — System statistics\n"
+                "- `POST /memory/explain_routing` — Routing explanation\n"
+                "- `POST /maintain` — Run maintenance\n"
+                "- `GET /health` — Health check\n\n"
+                "### Resources (MCP)\n"
+                "- `strata://stats` — Memory statistics\n"
+                "- `strata://events/recent` — Recent events\n"
+                "- `strata://schema` — Database schema\n"
+                "- `strata://tables` — All tables with counts\n"
+            )
+        }
+    ]
 
 
 def _start_http_server():
