@@ -159,6 +159,7 @@ async def memory_stats(random_string: str = "") -> dict:
 async def event_log_search(
     query: str,
     limit: int = 10,
+    offset: int = 0,
     since: Optional[str] = None,
     until: Optional[str] = None,
     include_forgotten: bool = False,
@@ -179,20 +180,23 @@ async def event_log_search(
         forgotten_filter = "(forgotten IS NONE OR forgotten = false)"
 
     if not query.strip():
-        # If no query, just return recent events
+        # If no query, just return recent events with offset
         sql = f"""
         SELECT id, content, timestamp, source, metadata, forgotten, forgotten_reason
         FROM event
         WHERE {forgotten_filter}
         {time_filter}
         ORDER BY timestamp DESC
-        LIMIT {limit};
+        LIMIT {limit}
+        START {offset};
         """
         result = await _query_surreal(sql)
         events = _extract_result(result, 1)
         for event in events:
             event["search_type"] = "recent"
         return {"events": _clean_output(events), "count": len(events)}
+
+    fetch_limit = (offset + limit) * 4
 
     # 1) Lexical search via FTX index
     ftx_sql = f"""
@@ -201,7 +205,7 @@ async def event_log_search(
     WHERE content @@ '{query_escaped}'
       AND {forgotten_filter}
       {time_filter}
-    LIMIT {limit * 4};
+    LIMIT {fetch_limit};
     """
 
     # Start FTX query immediately (overlap with embedding computation)
@@ -222,7 +226,7 @@ async def event_log_search(
           AND array::len(embedding) = {len(query_vector)}
           {time_filter}
         ORDER BY vec_score DESC
-        LIMIT {limit * 4};
+        LIMIT {fetch_limit};
         """
         vec_result = await _query_surreal(vec_sql)
         ftx_result = await ftx_task
@@ -251,7 +255,7 @@ async def event_log_search(
 
     sorted_events = [
         item["event"]
-        for item in sorted(fused.values(), key=lambda x: x["rrf"], reverse=True)[:limit]
+        for item in sorted(fused.values(), key=lambda x: x["rrf"], reverse=True)[offset:offset + limit]
     ]
     events = _clean_output(sorted_events)
 
