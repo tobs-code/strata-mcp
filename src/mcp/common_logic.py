@@ -198,8 +198,21 @@ def _categorize_results(results: List[Any]) -> Tuple[List[Dict], List[Dict], Lis
     for f in facts:
         for key in ('in', 'out'):
             val = f.get(key)
-            if isinstance(val, str) and val in name_to_entity:
-                f[key] = {"id": val, "name": name_to_entity[val], "type": ""}
+            if isinstance(val, dict):
+                val_id = val.get("id")
+                if val_id and val_id not in name_to_entity:
+                    for e in entities:
+                        if e.get("id") == val_id:
+                            name_to_entity[val_id] = e.get("name", val_id)
+                            break
+            if isinstance(val, str):
+                f[key] = {"id": val, "name": name_to_entity.get(val, val), "type": ""}
+            elif isinstance(val, dict):
+                f[key] = {
+                    "id": val.get("id", val.get(key, "")),
+                    "name": val.get("name", val.get("id", "")),
+                    "type": val.get("type", ""),
+                }
 
     return entities, facts, events
 

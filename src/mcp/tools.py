@@ -310,25 +310,25 @@ async def kg_query(
     result = await _query_surreal(sql)
     facts = _extract_result(result, 1)
 
-    # Enhance facts with entity information
+    # Enhance facts with entity information — always return {id, name, type}
     enhanced_facts = []
     for fact in facts:
-        fact_id = fact.get("id")
-
-        # Safely extract in_id and out_id - handle both dict and string formats
         in_data = fact.get("in")
         if isinstance(in_data, dict):
-            in_id = in_data.get("id")
+            in_id = in_data.get("id") or in_data.get("in")
+        elif isinstance(in_data, str):
+            in_id = in_data
         else:
             in_id = None
 
         out_data = fact.get("out")
         if isinstance(out_data, dict):
-            out_id = out_data.get("id")
+            out_id = out_data.get("id") or out_data.get("out")
+        elif isinstance(out_data, str):
+            out_id = out_data
         else:
             out_id = None
 
-        # Get detailed entity info for in/out
         if in_id:
             in_entity_sql = f"SELECT name, type FROM entity WHERE id = '{in_id}';"
             in_result = await _query_surreal(in_entity_sql)
@@ -337,9 +337,11 @@ async def kg_query(
                 in_entity = in_entities[0]
                 fact["in"] = {
                     "id": in_id,
-                    "name": in_entity.get("name"),
-                    "type": in_entity.get("type"),
+                    "name": in_entity.get("name", in_id),
+                    "type": in_entity.get("type", ""),
                 }
+            else:
+                fact["in"] = {"id": in_id, "name": in_id, "type": ""}
 
         if out_id:
             out_entity_sql = f"SELECT name, type FROM entity WHERE id = '{out_id}';"
@@ -349,9 +351,11 @@ async def kg_query(
                 out_entity = out_entities[0]
                 fact["out"] = {
                     "id": out_id,
-                    "name": out_entity.get("name"),
-                    "type": out_entity.get("type"),
+                    "name": out_entity.get("name", out_id),
+                    "type": out_entity.get("type", ""),
                 }
+            else:
+                fact["out"] = {"id": out_id, "name": out_id, "type": ""}
 
         enhanced_facts.append(fact)
 
