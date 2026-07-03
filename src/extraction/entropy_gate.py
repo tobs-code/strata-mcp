@@ -151,11 +151,12 @@ class EntropyGate:
             entropy -= p * math.log2(p)
         return entropy
 
-    def calculate_novelty(self, text: str) -> float:
+    def calculate_novelty(self, text: str, content_hash: Optional[str] = None) -> float:
         """
         Novelty based on embedding similarity against existing content in SurrealDB.
         Returns value between 0 (no novelty) and 1 (maximum novelty).
         Uses SurrealDB's native vector functions.
+        content_hash: if provided, excludes the event with this hash (prevents self-match).
         """
         if not text.strip():
             return 0.0
@@ -166,12 +167,15 @@ class EntropyGate:
         
         # Search for top-k similar vectors in SurrealDB
         # We use cosine similarity and calculate 1.0 - avg_similarity for novelty
+        exclude_self = ""
+        if content_hash:
+            exclude_self = f"\n  AND content_hash != '{content_hash}'"
         sql = f"""
         SELECT vector::similarity::cosine(embedding, {emb_str}) AS similarity
         FROM event
         WHERE embedding IS NOT NONE 
           AND array::len(embedding) = {len(embedding)}
-          AND (forgotten IS NONE OR forgotten = false)
+          AND (forgotten IS NONE OR forgotten = false){exclude_self}
         ORDER BY similarity DESC
         LIMIT 5;
         """
@@ -221,9 +225,10 @@ class EntropyGate:
         unique = len(set(text.lower()))
         return unique / len(text)
 
-    def should_extract(self, text: str) -> Dict[str, Any]:
+    def should_extract(self, text: str, content_hash: Optional[str] = None) -> Dict[str, Any]:
         """
         Entscheidet basierend auf Composite-Score ob Text in KG extrahiert werden soll
+        content_hash: wird an calculate_novelty weitergereicht, um Self-Match zu verhindern
         """
         if len(text) < self.config.min_length:
             result = {
@@ -261,7 +266,7 @@ class EntropyGate:
         
         # Calculate individual scores
         text_entropy = self.calculate_char_entropy(text)
-        novelty = self.calculate_novelty(text)
+        novelty = self.calculate_novelty(text, content_hash=content_hash)
         
         # Normalize entropy to 0-1 range (assuming max entropy of ~4.5)
         normalized_entropy = min(text_entropy / 4.5, 1.0)
@@ -876,7 +881,7 @@ class EntropyGate:
             event_id = existing[0].get("id")
             if debug:
                 print(f"  [Dedup] Found existing event {event_id} for identical content and source")
-            gate_result = self.should_extract(text)
+            gate_result = self.should_extract(text, content_hash=content_hash)
             if gate_result["decision"] == "extract" and event_id:
                 kg_result = self._extract_to_kg(text, event_id, debug)
             return event_id
@@ -915,8 +920,8 @@ class EntropyGate:
             sys.stderr.write(f"[EntropyGate] WARNING: ingest returned no event_id\n")
             sys.stderr.write(f"[EntropyGate]   source={source}, content_length={len(text)}, hash={content_hash[:16]}...\n")
         
-        # 2. Entropy Gate prüfen
-        gate_result = self.should_extract(text)
+        # 2. Entropy Gate prüfen (mit content_hash, um Self-Match zu vermeiden)
+        gate_result = self.should_extract(text, content_hash=content_hash)
         
         if debug:
             print(f"Entropy Gate Decision: {gate_result}")
