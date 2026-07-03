@@ -202,3 +202,40 @@ async def memory_consolidate_endpoint(request_data: dict):
         scope=request_data.get("scope", "local"),
         delete_stale=request_data.get("delete_stale", False)
     )
+
+
+@app.post("/memory/unforget")
+async def memory_unforget_endpoint(request_data: dict):
+    """Restores a previously forgotten event. Resets forgotten=false."""
+    from .tools import memory_unforget
+    return await memory_unforget(
+        event_id=request_data.get("event_id", "")
+    )
+
+
+@app.get("/memory/entities")
+async def list_entities_endpoint(
+    limit: int = Query(20, description="Max results"),
+    offset: int = Query(0, description="Pagination offset"),
+    type: Optional[str] = Query(None, description="Filter by entity type"),
+    name_contains: Optional[str] = Query(None, description="Case-insensitive substring filter on name"),
+    sort_by: str = Query("name", description="Sort field: name, created_at, updated_at"),
+    sort_order: str = Query("asc", description="Sort order: asc or desc"),
+):
+    """Lists entities in the knowledge graph with filtering and pagination."""
+    from .tools import list_entities
+    return await list_entities(limit, offset, type, name_contains, sort_by, sort_order)
+
+
+@app.get("/memory/events")
+async def list_events_endpoint(
+    limit: int = Query(20, description="Max results"),
+    offset: int = Query(0, description="Pagination offset"),
+    since: Optional[str] = Query(None, description="Start date"),
+    until: Optional[str] = Query(None, description="End date"),
+    source: Optional[str] = Query(None, description="Filter by event source"),
+    include_forgotten: bool = Query(False, description="Include forgotten events"),
+):
+    """Lists events from the raw event log with filtering and pagination."""
+    from .tools import list_events
+    return await list_events(limit, offset, since, until, source, include_forgotten)

@@ -1,6 +1,6 @@
 # MCP Server — STRATA Memory Stack
 
-The MCP Server exposes the entire STRATA Memory Stack as a standardized tool interface via the [Model Context Protocol (MCP)](https://modelcontextprotocol.io). Any MCP-compatible client (e.g. Claude Desktop, Cursor, VS Code with MCP extension) can call all 10 memory tools directly — without hosting the stack itself.
+The MCP Server exposes the entire STRATA Memory Stack as a standardized tool interface via the [Model Context Protocol (MCP)](https://modelcontextprotocol.io). Any MCP-compatible client (e.g. Claude Desktop, Cursor, VS Code with MCP extension) can call all 13 memory tools directly — without hosting the stack itself.
 
 ## Architecture Overview
 
@@ -138,11 +138,11 @@ In `.cursor/mcp.json` or via the VS Code MCP extension:
 }
 ```
 
-## The 10 Tools (4 Layers)
+## The 13 Tools (4 Layers)
 
 ### Layer 1 — Core Memory Operations
 
-The three tools an STRATA needs 90% of the time in daily operation.
+The three core tools an STRATA needs 90% of the time in daily operation.
 
 #### `memory_store`
 
@@ -160,7 +160,10 @@ Stores an event in the immutable Raw Event Log. The Entropy Gate later decides w
 {
   "event_id": "event:abc123…",
   "status": "stored",
-  "source": "user_input"
+  "source": "user_input",
+  "gate": {
+    "decision": "extract"
+  }
 }
 ```
 
@@ -241,7 +244,7 @@ Updates a fact in the Knowledge Graph through logical invalidation. The old fact
 
 ### Layer 2 — Retrieval Primitives
 
-For STRATAs that need more control over the retrieval process and want to bypass the router.
+Six tools for direct access to events, entities, and facts — bypasses the router.
 
 #### `event_log_search`
 
@@ -253,6 +256,8 @@ Hybrid search in the Event Log (BM25 via FTX index + Vector via HNSW + RRF fusio
 | `since` | `string` | no | ISO timestamp (lower bound) |
 | `until` | `string` | no | ISO timestamp (upper bound) |
 | `limit` | `int` | no | Max results (default: 10) |
+| `offset` | `int` | no | Pagination offset (default: 0) |
+| `include_forgotten` | `bool` | no | Include forgotten events (default: false) |
 
 **Returns:**
 
@@ -303,15 +308,78 @@ Direct graph traversal query on the temporal Knowledge Graph.
       "predicate": "works_at",
       "valid_from": "2026-06-20T00:00:00Z",
       "valid_until": null,
-      "in": {"id": "entity:alice", "name": "Alice"},
-      "out": {"id": "entity:acme", "name": "Acme Corp"}
+      "in": {"id": "entity:alice", "name": "Alice", "type": "person"},
+      "out": {"id": "entity:acme", "name": "Acme Corp", "type": "organization"}
     }
   ],
+  "count": 1,
+  "query_params": {
+    "subject": "Alice",
+    "predicate": "works_at",
+    "at_time": null
+  }
+}
+```
+
+---
+
+#### `list_entities`
+
+Lists entities in the knowledge graph with filtering and pagination.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `limit` | `int` | no | Max results (default: 20) |
+| `offset` | `int` | no | Pagination offset (default: 0) |
+| `type` | `string` | no | Filter by entity type (e.g. `"person"`) |
+| `name_contains` | `string` | no | Case-insensitive substring filter on name |
+| `sort_by` | `string` | no | Sort field: `"name"`, `"created_at"`, `"updated_at"` (default: `"name"`) |
+| `sort_order` | `string` | no | `"asc"` or `"desc"` (default: `"asc"`) |
+
+**Returns:**
+
+```json
+{
   "entities": [
-    {"id": "entity:alice", "name": "Alice", "type": "person"},
-    {"id": "entity:acme", "name": "Acme Corp", "type": "organization"}
+    {"id": "entity:alice", "name": "Alice", "type": "person", "created_at": "2026-07-03T15:12:12Z", "updated_at": "2026-07-03T15:12:13Z"}
   ],
-  "count": 1
+  "count": 1,
+  "total": 63
+}
+```
+
+---
+
+#### `list_events`
+
+Lists events from the raw event log with filtering and pagination.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `limit` | `int` | no | Max results (default: 20) |
+| `offset` | `int` | no | Pagination offset (default: 0) |
+| `since` | `string` | no | ISO timestamp (lower bound) |
+| `until` | `string` | no | ISO timestamp (upper bound) |
+| `source` | `string` | no | Filter by event source |
+| `include_forgotten` | `bool` | no | Include forgotten events (default: false) |
+
+**Returns:**
+
+```json
+{
+  "events": [
+    {
+      "id": "event:abc",
+      "content": "Alice works at Acme Corp…",
+      "timestamp": "2026-06-29T15:00:00Z",
+      "source": "user_input",
+      "metadata": null,
+      "forgotten": null,
+      "forgotten_reason": null
+    }
+  ],
+  "count": 5,
+  "total": 34
 }
 ```
 
@@ -423,13 +491,34 @@ Soft-delete: Marks an event or entity as forgotten without altering the Raw Log.
 
 ```json
 {
-  "forgotten_id": "entity:alice",
-  "type": "entity",
+  "forgotten_items": [
+    {"id": "event:abc123", "type": "event", "status": "forgotten"}
+  ],
+  "count": 1,
   "reason": "User requested deletion"
 }
 ```
 
 **Internally:** `UPDATE <id> SET forgotten = true`
+
+---
+
+#### `memory_unforget`
+
+Restores a previously forgotten event. Resets `forgotten = false`.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `event_id` | `string` | yes | Event ID to restore (e.g. `"event:abc123"`) |
+
+**Returns:**
+
+```json
+{
+  "status": "restored",
+  "event_id": "event:abc123"
+}
+```
 
 ---
 
@@ -441,6 +530,7 @@ Manual trigger for Conservative Maintenance — local patches only, no global re
 |-----------|------|----------|-------------|
 | `scope` | `string` | yes | `"local"` (default) or `"entity"` |
 | `entity` | `string` | no | Entity name (only when `scope="entity"`) |
+| `delete_stale` | `bool` | no | Physically remove stale facts (default: false) |
 
 **Return — `scope="local"`:**
 
@@ -448,7 +538,8 @@ Manual trigger for Conservative Maintenance — local patches only, no global re
 {
   "scope": "local",
   "stale_facts_found": 26,
-  "status": "reviewed"
+  "deleted_count": 0,
+  "status": "success"
 }
 ```
 
@@ -469,16 +560,19 @@ Manual trigger for Conservative Maintenance — local patches only, no global re
 
 | Tool | Layer | Input | Output |
 |------|-------|-------|--------|
-| `memory_store` | Core | `content`, `source?`, `metadata?` | `event_id`, `status` |
+| `memory_store` | Core | `content`, `source?`, `metadata?` | `event_id`, `status`, `gate` |
 | `memory_query` | Core | `query`, `cost_budget?` | `classified_as`, `strategy`, `results` |
 | `memory_update` | Core | `subject`, `predicate`, `new_value` | `invalidated_fact`, `new_fact` |
-| `event_log_search` | Primitives | `query`, `since?`, `until?`, `limit?` | `events[]`, `count` |
-| `kg_query` | Primitives | `subject?`, `predicate?`, `at_time?` | `facts[]`, `entities[]`, `count` |
+| `event_log_search` | Primitives | `query`, `since?`, `until?`, `limit?`, `offset?`, `include_forgotten?` | `events[]`, `count` |
+| `kg_query` | Primitives | `subject?`, `predicate?`, `at_time?` | `facts[]`, `count`, `query_params` |
+| `list_entities` | Primitives | `limit?`, `offset?`, `type?`, `name_contains?`, `sort_by?`, `sort_order?` | `entities[]`, `count`, `total` |
+| `list_events` | Primitives | `limit?`, `offset?`, `since?`, `until?`, `source?`, `include_forgotten?` | `events[]`, `count`, `total` |
 | `semantic_search` | Primitives | `query`, `top_k?` | `events[]`, `count` |
 | `memory_stats` | Introspection | — | `event_count`, `entity_count`, `fact_count`, `gate_pass_rate`, … |
 | `explain_routing` | Introspection | `query` | `classified_as`, `strategy_selected`, `reason` |
-| `memory_forget` | Maintenance | `event_id?` or `entity?`, `reason?` | `forgotten_id`, `type` |
-| `memory_consolidate` | Maintenance | `scope`, `entity?` | `stale_facts_found` or `status` |
+| `memory_forget` | Maintenance | `event_id?` or `entity?`, `reason?` | `forgotten_items[]`, `count`, `reason` |
+| `memory_unforget` | Maintenance | `event_id` | `status`, `event_id` |
+| `memory_consolidate` | Maintenance | `scope`, `entity?`, `delete_stale?` | `stale_facts_found`, `deleted_count`, `status` |
 
 ---
 
@@ -605,7 +699,7 @@ The HNSW index `event_embedding_vec` is defined on the `embedding` field with `D
 
 | File | Purpose |
 |------|---------|
-| `src/mcp/server.py` | MCP server implementation (10 tools) |
+| `src/mcp/server.py` | MCP server implementation (13 tools) |
 | `docs/schema.surql` | SurrealDB schema (Event Log, KG, indexes) |
 | `docs/helper_functions.surql` | DB-side functions |
 | `docs/test_data.surql` | Sample test data |
