@@ -1,24 +1,28 @@
 """
-Extractor Integration for Strata
+Extractor Integration for sieveon
 Coordinates the integration between extraction components and the broader system
 """
-from typing import Dict, Any, Optional
-import sys
-import os
-import httpx
+
 import json
+import os
+import sys
+from typing import Any, Dict, Optional
+
+import httpx
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 
 from src.extraction.coarse_extractor import ExtractionPipeline
-from src.extraction.entropy_gate import EntropyGate, escape_surrealql
 from src.extraction.embedding_service import get_embedding_service
-
+from src.extraction.entropy_gate import EntropyGate, escape_surrealql
 
 SURREAL_URL = os.getenv("SURREALDB_URL", "http://127.0.0.1:8000/sql")
-SURREAL_AUTH = (os.getenv("SURREALDB_USER", "root"), os.getenv("SURREALDB_PASS", "root"))
-SURREAL_NS = os.getenv("SURREALDB_NS", "strata")
-SURREAL_DB = os.getenv("SURREALDB_DB", "strata")
+SURREAL_AUTH = (
+    os.getenv("SURREALDB_USER", "root"),
+    os.getenv("SURREALDB_PASS", "root"),
+)
+SURREAL_NS = os.getenv("SURREALDB_NS", "sieveon")
+SURREAL_DB = os.getenv("SURREALDB_DB", "sieveon")
 
 
 async def _query_surreal(sql: str) -> Any:
@@ -52,9 +56,7 @@ def _extract_surreal_result(data: Any) -> list:
     candidates = [
         item
         for item in data
-        if isinstance(item, dict)
-        and item.get("status") == "OK"
-        and "result" in item
+        if isinstance(item, dict) and item.get("status") == "OK" and "result" in item
     ]
     if not candidates:
         return []
@@ -102,7 +104,9 @@ class ExtractorIntegration:
                 loop = None
 
             if loop and loop.is_running():
-                asyncio.create_task(self._store_extracted_entities(extraction_result, source))
+                asyncio.create_task(
+                    self._store_extracted_entities(extraction_result, source)
+                )
             else:
                 asyncio.run(self._store_extracted_entities(extraction_result, source))
 
@@ -167,7 +171,11 @@ class ExtractorIntegration:
                 continue
 
             subject_name = entity_entries[0][1][0] if entity_entries[0][1] else None
-            object_name = entity_entries[1][1][0] if len(entity_entries) > 1 and entity_entries[1][1] else None
+            object_name = (
+                entity_entries[1][1][0]
+                if len(entity_entries) > 1 and entity_entries[1][1]
+                else None
+            )
 
             if not subject_name or not object_name:
                 continue
@@ -206,7 +214,9 @@ class ExtractorIntegration:
                 await _query_surreal(relate_sql)
                 stored_facts += 1
             except Exception as e:
-                print(f"Failed to store fact {subject_name} {predicate} {object_name}: {e}")
+                print(
+                    f"Failed to store fact {subject_name} {predicate} {object_name}: {e}"
+                )
 
         return {
             "stored_entities": stored_entities,
@@ -218,24 +228,26 @@ class ExtractorIntegration:
 if __name__ == "__main__":
     # Initialize the integrated extractor
     extractor = ExtractorIntegration()
-    
+
     # Test with various types of content
     test_texts = [
         "John Smith works at Acme Corp in New York.",
         "The weather is nice today.",
         "Meeting scheduled for tomorrow at 3 PM with Alice Johnson.",
         "The quarterly report shows increased revenue.",
-        "Short text."  # This might be filtered by entropy gate
+        "Short text.",  # This might be filtered by entropy gate
     ]
-    
+
     for i, text in enumerate(test_texts):
-        print(f"\n--- Processing text {i+1} ---")
-        result = extractor.process_text(text, f"test_source_{i+1}")
-        
+        print(f"\n--- Processing text {i + 1} ---")
+        result = extractor.process_text(text, f"test_source_{i + 1}")
+
         print(f"Text: {text}")
         print(f"Entropy gate decision: {result['entropy_gate_result']['decision']}")
         print(f"Applied extraction: {result['applied_extraction']}")
-        
-        if result['applied_extraction']:
-            extraction = result['extraction_result']
-            print(f"Found {extraction['entity_count']} entities and {extraction['relation_count']} relations")
+
+        if result["applied_extraction"]:
+            extraction = result["extraction_result"]
+            print(
+                f"Found {extraction['entity_count']} entities and {extraction['relation_count']} relations"
+            )

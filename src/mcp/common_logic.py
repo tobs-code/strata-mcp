@@ -188,6 +188,40 @@ def _categorize_results(results: List[Any]) -> Tuple[List[Dict], List[Dict], Lis
                     else:
                         events.append(clean)
 
+    NOISY_PREDICATES = {"weakly_related", "mentions"}
+    FACTS_MIN_CONFIDENCE = 0.5
+    filtered_facts = []
+    for f in facts:
+        pred = f.get("predicate", "")
+        conf = f.get("confidence", 0) or 0
+        if pred in NOISY_PREDICATES:
+            continue
+        if pred in ("co_occurs_with", "strongly_related", "related_to") and conf < FACTS_MIN_CONFIDENCE:
+            continue
+        # Ontologie-Validierung: Prädikat muss zu Entity-Typen passen
+        in_data = f.get("in", {})
+        out_data = f.get("out", {})
+        in_type = in_data.get("type", "") if isinstance(in_data, dict) else ""
+        out_type = out_data.get("type", "") if isinstance(out_data, dict) else ""
+        if pred not in ("related_to", "co_occurs_with", "strongly_related", "weakly_related", "mentions"):
+            in_name = in_data.get("name", "") if isinstance(in_data, dict) else ""
+            out_name = out_data.get("name", "") if isinstance(out_data, dict) else ""
+            # Nur types via infer_entity_type ergänzen wenn der Name keine SurrealDB-ID ist
+            if not in_type and in_name and not in_name.startswith("entity:") and not in_name.startswith("fact:"):
+                in_type = infer_entity_type(in_name)
+            if not out_type and out_name and not out_name.startswith("entity:") and not out_name.startswith("fact:"):
+                out_type = infer_entity_type(out_name)
+            # Validierung wenn beide types bekannt sind und keiner "concept" (Fallback) ist
+            if in_type and out_type and in_type != "concept" and out_type != "concept":
+                from src.extraction.entity_utils import validate_predicate
+                if not validate_predicate(in_type, pred, out_type):
+                    continue
+            # Fallback: wenn Typen nicht bestimmbar (entity-ID als name), require high confidence
+            elif conf < 0.8:
+                continue
+        filtered_facts.append(f)
+    facts = filtered_facts
+
     name_to_entity = {}
     for e in entities:
         eid = e.get("id")

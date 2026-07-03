@@ -1,1 +1,1 @@
-"""STRATA Memory Control Plane - Modular Server Package"""
+"""sieveon Memory Control Plane - Modular Server Package"""

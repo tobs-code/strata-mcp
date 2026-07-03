@@ -17,6 +17,7 @@ from src.extraction.entropy_gate import escape_surrealql
 
 from .common_logic import _execute_query, _get_or_create_entity, _store_content
 from .core import _clean_output, _embed_query, _extract_result, _query_surreal, mcp
+from src.extraction.entity_utils import infer_entity_type, validate_predicate
 
 
 @mcp.tool()
@@ -323,14 +324,28 @@ async def kg_query(
     result = await _query_surreal(sql)
     facts = _extract_result(result, 1)
 
+    NOISY_PREDICATES = {"weakly_related", "mentions"}
+    MIN_CONFIDENCE = 0.5
+
     enhanced_facts = []
     for fact in facts:
+        pred = fact.get("predicate", "")
+        conf = fact.get("confidence", 0) or 0
+        if pred in NOISY_PREDICATES:
+            continue
+        if pred in ("co_occurs_with", "strongly_related", "related_to") and conf < MIN_CONFIDENCE:
+            continue
+
         in_id = fact.pop("in_id", None)
         in_name = fact.pop("in_name", None)
         in_type = fact.pop("in_type", None)
         out_id = fact.pop("out_id", None)
         out_name = fact.pop("out_name", None)
         out_type = fact.pop("out_type", None)
+
+        # Ontologie-Validierung: Prädikat muss zu Entity-Typen passen
+        if not _is_fact_plausible(pred, in_type or "", out_type or ""):
+            continue
 
         fact["in"] = {
             "id": in_id,
@@ -494,9 +509,32 @@ async def semantic_search(query: str, top_k: int = 5) -> dict:
                 kg_result = await _query_surreal(kg_sql)
                 kg_facts_raw = _extract_result(kg_result, 1) or []
                 if kg_facts_raw:
-                    kg_facts_map["_all"] = [_clean_output(f) for f in kg_facts_raw]
-            except Exception:
-                pass
+                    NOISY_PREDICATES = {"weakly_related", "mentions"}
+                    MIN_CONFIDENCE = 0.5
+                    filtered = []
+                    for f in kg_facts_raw:
+                        pred = f.get("predicate", "")
+                        conf = f.get("confidence", 0) or 0
+                        if pred in NOISY_PREDICATES:
+                            continue
+                        if pred in ("co_occurs_with", "strongly_related", "related_to") and conf < MIN_CONFIDENCE:
+                            continue
+                        # Ontologie-Validierung auf subject/object types
+                        subj_name = f.get("subject", "") or ""
+                        obj_name = f.get("object", "") or ""
+                        if subj_name and obj_name and pred not in ("related_to", "co_occurs_with", "strongly_related"):
+                            try:
+                                subj_type = infer_entity_type(subj_name)
+                                obj_type = infer_entity_type(obj_name)
+                                if not validate_predicate(subj_type, pred, obj_type):
+                                    continue
+                            except Exception:
+                                continue
+                        filtered.append(f)
+                    if filtered:
+                        kg_facts_map["_all"] = [_clean_output(f) for f in filtered]
+            except Exception as e:
+                print(f"[semantic_search] KG fact filtering error: {e}")
 
     # 6) Sort by RRF, normalize scores to 0-1, build final output
     scored.sort(key=lambda x: x[0], reverse=True)
@@ -537,6 +575,15 @@ async def semantic_search(query: str, top_k: int = 5) -> dict:
         result["kg_fact_count"] = len(all_facts)
 
     return result
+
+
+def _is_fact_plausible(predicate: str, in_type: str, out_type: str) -> bool:
+    """Check if a fact's predicate is plausible given its entity types.
+    Filters out facts where the predicate doesn't match the ontology
+    (e.g., 'works_at' between two technologies)."""
+    if not in_type or not out_type or predicate in ("related_to", "co_occurs_with", "strongly_related", "weakly_related", "mentions"):
+        return True
+    return validate_predicate(in_type, predicate, out_type)
 
 
 def _character_diversity(text: str) -> float:
