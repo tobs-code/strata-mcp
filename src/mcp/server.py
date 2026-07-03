@@ -43,7 +43,9 @@ from .tools import (
     explain_routing,
     memory_forget,
     memory_unforget,
-    memory_consolidate
+    memory_consolidate,
+    list_entities,
+    list_events,
 )
 
 # Import endpoints module to register HTTP endpoints (without importing specific functions)

@@ -769,3 +769,90 @@ async def memory_consolidate(
         "stale_facts_sample": stale_facts[:10],  # Return first 10 as sample
         "status": "success",
     }
+
+
+@mcp.tool()
+async def list_entities(
+    limit: int = 20,
+    offset: int = 0,
+    type: Optional[str] = None,
+    name_contains: Optional[str] = None,
+    sort_by: str = "name",
+    sort_order: str = "asc",
+) -> dict:
+    """List entities in the knowledge graph with filtering and pagination."""
+    if sort_by not in ("name", "created_at", "updated_at"):
+        sort_by = "name"
+    if sort_order not in ("asc", "desc"):
+        sort_order = "asc"
+    order = f"{sort_by} {sort_order}"
+
+    filters = ["(forgotten IS NONE OR forgotten = false)"]
+    if type:
+        type_escaped = escape_surrealql(type)
+        filters.append(f"type = '{type_escaped}'")
+    if name_contains:
+        nc_escaped = escape_surrealql(name_contains)
+        filters.append(f"name CONTAINS '{nc_escaped}'")
+    where = " AND ".join(filters)
+
+    sql = f"""
+    SELECT id, name, type, created_at, updated_at
+    FROM entity
+    WHERE {where}
+    ORDER BY {order}
+    LIMIT {limit}
+    START {offset};
+    """
+    count_sql = f"SELECT count() FROM entity WHERE {where} GROUP ALL;"
+
+    result = await _query_surreal(sql)
+    count_result = await _query_surreal(count_sql)
+
+    entities = _clean_output(_extract_result(result, 1))
+    counts = _extract_result(count_result, 1)
+    total = counts[0].get("count", 0) if counts else 0
+
+    return {"entities": entities, "count": len(entities), "total": total}
+
+
+@mcp.tool()
+async def list_events(
+    limit: int = 20,
+    offset: int = 0,
+    since: Optional[str] = None,
+    until: Optional[str] = None,
+    source: Optional[str] = None,
+    include_forgotten: bool = False,
+) -> dict:
+    """List events from the raw event log with filtering and pagination."""
+    filters = []
+    if not include_forgotten:
+        filters.append("(forgotten IS NONE OR forgotten = false)")
+    if since:
+        filters.append(f"timestamp >= '{escape_surrealql(since)}'")
+    if until:
+        filters.append(f"timestamp <= '{escape_surrealql(until)}'")
+    if source:
+        source_escaped = escape_surrealql(source)
+        filters.append(f"source = '{source_escaped}'")
+    where = " AND ".join(filters) if filters else "1=1"
+
+    sql = f"""
+    SELECT id, content, timestamp, source, metadata, forgotten, forgotten_reason
+    FROM event
+    WHERE {where}
+    ORDER BY timestamp DESC
+    LIMIT {limit}
+    START {offset};
+    """
+    count_sql = f"SELECT count() FROM event WHERE {where} GROUP ALL;"
+
+    result = await _query_surreal(sql)
+    count_result = await _query_surreal(count_sql)
+
+    events = _clean_output(_extract_result(result, 1))
+    counts = _extract_result(count_result, 1)
+    total = counts[0].get("count", 0) if counts else 0
+
+    return {"events": events, "count": len(events), "total": total}
