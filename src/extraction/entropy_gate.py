@@ -225,6 +225,14 @@ class EntropyGate:
         unique = len(set(text.lower()))
         return unique / len(text)
 
+    @staticmethod
+    def _word_diversity(text: str) -> float:
+        """Word-level diversity: len(set(words)) / len(words). < 0.20 = repetitive."""
+        words = text.lower().split()
+        if not words:
+            return 0.0
+        return len(set(words)) / len(words)
+
     def should_extract(self, text: str, content_hash: Optional[str] = None) -> Dict[str, Any]:
         """
         Entscheidet basierend auf Composite-Score ob Text in KG extrahiert werden soll
@@ -251,18 +259,26 @@ class EntropyGate:
                               reason_override=result["reason"])
             return result
         
-        # Diversity-Check: repetitive Texte (z.B. "aaa...", "test test...") skippen
-        diversity = self._character_diversity(text)
-        if diversity < self.config.min_diversity:
-            result = {
-                "decision": "skip",
-                "reason": "too_repetitive",
-                "character_diversity": diversity,
-                "threshold": self.config.min_diversity
-            }
-            self._log_decision(text, 0.0, 0.0, 0.0, result["decision"],
-                              reason_override=result["reason"])
-            return result
+        # Diversity-Check: character-level für Kurztexte, word-level für längere
+        # Character diversity skaliert nicht mit Textlänge (Englisch hat nur ~36 unique chars)
+        if len(text) <= 150:
+            diversity = self._character_diversity(text)
+            threshold = self.config.min_diversity
+            if diversity < threshold:
+                result = {"decision": "skip", "reason": "too_repetitive",
+                          "character_diversity": diversity, "threshold": threshold}
+                self._log_decision(text, 0.0, 0.0, 0.0, result["decision"],
+                                  reason_override=result["reason"])
+                return result
+        else:
+            diversity = self._word_diversity(text)
+            threshold = 0.20
+            if diversity < threshold:
+                result = {"decision": "skip", "reason": "too_repetitive",
+                          "word_diversity": diversity, "threshold": threshold}
+                self._log_decision(text, 0.0, 0.0, 0.0, result["decision"],
+                                  reason_override=result["reason"])
+                return result
         
         # Calculate individual scores
         text_entropy = self.calculate_char_entropy(text)
