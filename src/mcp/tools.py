@@ -651,10 +651,30 @@ async def memory_forget(
             }
 
     if entity:
-        # Mark all facts related to this entity as forgotten/invalidated
         entity_escaped = escape_surrealql(entity)
 
-        # Find and invalidate all facts related to this entity
+        # 1. Mark the entity itself as forgotten FIRST – if this fails, no facts are touched
+        try:
+            entity_find_sql = (
+                f"SELECT id FROM entity WHERE name = '{entity_escaped}' LIMIT 1;"
+            )
+            entity_result = await _query_surreal(entity_find_sql)
+            entities = _extract_result(entity_result, 1)
+
+            if entities:
+                entity_id = entities[0].get("id")
+                entity_update_sql = f"UPDATE {entity_id} SET forgotten = true, forget_reason = '{escape_surrealql(reason)}';"
+                await _query_surreal(entity_update_sql)
+                forgotten_items.append(
+                    {"id": entity_id, "type": "entity", "status": "forgotten"}
+                )
+        except Exception as e:
+            return {
+                "status": "error",
+                "message": f"Failed to forget entity {entity}: {str(e)}",
+            }
+
+        # 2. Now invalidate all facts related to this entity
         find_facts_sql = f"""
         SELECT id FROM fact
         WHERE in.name = '{entity_escaped}' OR out.name = '{entity_escaped}';
@@ -675,27 +695,6 @@ async def memory_forget(
                     "status": "error",
                     "message": f"Failed to invalidate fact {fact_id}: {str(e)}",
                 }
-
-        # Mark the entity itself as forgotten
-        try:
-            entity_find_sql = (
-                f"SELECT id FROM entity WHERE name = '{entity_escaped}' LIMIT 1;"
-            )
-            entity_result = await _query_surreal(entity_find_sql)
-            entities = _extract_result(entity_result, 1)
-
-            if entities:
-                entity_id = entities[0].get("id")
-                entity_update_sql = f"UPDATE {entity_id} SET forgotten = true, forgotten_reason = '{escape_surrealql(reason)}';"
-                await _query_surreal(entity_update_sql)
-                forgotten_items.append(
-                    {"id": entity_id, "type": "entity", "status": "forgotten"}
-                )
-        except Exception as e:
-            return {
-                "status": "error",
-                "message": f"Failed to forget entity {entity}: {str(e)}",
-            }
 
     return {
         "forgotten_items": forgotten_items,
@@ -736,11 +735,8 @@ async def memory_consolidate(
     """Consolidates memory entries. When delete_stale=True, physically removes stale facts from the database."""
 
     # Find stale facts: nur facts mit valid_until in der Vergangenheit
-    # Explizit valid_until != NONE ausschließen, damit aktive Facts nicht gelöscht werden
-    if delete_stale:
-        time_clause = "valid_until != NONE AND valid_until < time::now()"
-    else:
-        time_clause = "valid_until != NONE"
+    # Gleiche Clause für Dry-Run und Delete – Dry-Run zeigt exakt was gelöscht würde
+    time_clause = "valid_until != NONE AND valid_until < time::now()"
 
     if entity:
         entity_escaped = escape_surrealql(entity)
