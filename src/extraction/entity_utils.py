@@ -222,8 +222,9 @@ _GROQ_SYSTEM_PROMPT = (
     "2. Skip generic terms: job roles, common nouns, measurements, prices, standalone years, single generic words\n"
     "3. Universities, institutes, and colleges are organizations, not locations\n"
     "4. Generic event descriptions like 'conference' or 'meeting' without a proper name should be skipped\n"
-    "5. Confidence: 0.90-0.99 for clear proper names, 0.70-0.89 when ambiguous or partial\n"
-    "6. Output ONLY the pipe lines — no greetings, no explanations, no markdown"
+    "5. Entity names MUST be short canonical forms (e.g. 'STRATA', not 'STRATA is a framework'). Never output full sentences, clauses, or phrases containing verbs as entity names.\n"
+    "6. Confidence: 0.90-0.99 for clear proper names, 0.70-0.89 when ambiguous or partial\n"
+    "7. Output ONLY the pipe lines — no greetings, no explanations, no markdown"
 )
 
 _GROQ_FEW_SHOT_EXAMPLES = """\
