@@ -138,7 +138,7 @@ composite = alpha * normalized_text_entropy + beta * embedding_novelty
 
 **Decision:** `extract` if `composite >= threshold`, otherwise `ignore`.
 
-**Diversity guardrails (pre-filter):** Kurztexte (≤150 Zeichen) werden auf `character_diversity < 0.15` geprüft; längere Texte auf `word_diversity < 0.20`. Dies verhindert Noise ("aaaa...", "test test...") während normale englische Texte jeder Länge passieren.
+**Diversity guardrails (pre-filter):** Short texts (≤150 chars) are checked for `character_diversity < 0.15`; longer texts use `word_diversity < 0.20`. This blocks noise ("aaaa...", "test test...") while allowing normal English text of any length to pass through to the composite score.
 
 **Length guardrails:** texts shorter than `min_length = 10` or longer than `max_length = 1000` characters are always skipped.
 
@@ -183,12 +183,12 @@ Budgets are **measured, enforced, and adaptively scaled** per execution.
 
 ## Schema Evolution / Migration
 
-Breaking schema changes (renaming fields, changing types) werden **automatisch** über das versionierte Migrations-System ausgerollt.
+Breaking schema changes (renaming fields, changing types) are rolled out **automatically** via the versioned migration system.
 
-- **Engine:** `src/mcp/migrations.py` — `MigrationEngine` mit Registry-Muster
-- **Tracking:** Die Tabelle `_schema_migrations` in SurrealDB speichert angewandte Versionen (inkl. Checksum)
-- **Autostart:** `ensure_schema_loaded()` in `src/mcp/core.py` ruft Migrationen beim Serverstart auf
-- **Neue Migration hinzufügen:** in `_register_builtin()` eintragen:
+- **Engine:** `src/mcp/migrations.py` — `MigrationEngine` with registry pattern
+- **Tracking:** The `_schema_migrations` table in SurrealDB stores applied versions (incl. checksum)
+- **Auto-start:** `ensure_schema_loaded()` in `src/mcp/core.py` runs pending migrations on server startup
+- **Adding a new migration:** register it in `_register_builtin()`:
 
 ```python
 engine.register(Migration(
@@ -198,8 +198,8 @@ engine.register(Migration(
 ))
 ```
 
-- `docs/schema.surql` ist die kanonische Referenz für Neuanlagen (Baseline). Änderungen werden dort dokumentiert und als Migrationsschritt versioniert.
-- Non-breaking additive changes (neue Felder/Tabellen): via `docs/schema.surql` deployen (`IF NOT EXISTS` schützt vor Duplikaten).
+- `docs/schema.surql` is the canonical reference for fresh installs (baseline). Changes are documented there and versioned as migration steps.
+- Non-breaking additive changes (new fields/tables): deploy via `docs/schema.surql` (`IF NOT EXISTS` prevents duplicates).
 
 ---
 
