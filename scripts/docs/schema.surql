@@ -88,6 +88,8 @@ DEFINE FIELD text_score ON gate_log TYPE float; -- Normalisierte Text-Entropy
 DEFINE FIELD novelty ON gate_log TYPE float; -- Embedding-Novelty
 DEFINE FIELD gate_score ON gate_log TYPE float; -- Composite Score
 DEFINE FIELD decision ON gate_log TYPE string; -- "extract" or "skip"
+DEFINE FIELD reason ON gate_log TYPE string; -- Human-readable decision reason
+DEFINE FIELD threshold ON gate_log TYPE float; -- Adaptive threshold used
 DEFINE FIELD ts ON gate_log TYPE datetime DEFAULT time::now();
 
 -- Index für Gate Log

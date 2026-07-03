@@ -226,29 +226,38 @@ class EntropyGate:
         Entscheidet basierend auf Composite-Score ob Text in KG extrahiert werden soll
         """
         if len(text) < self.config.min_length:
-            return {
+            result = {
                 "decision": "skip",
                 "reason": "text_too_short",
                 "text_length": len(text),
                 "min_length": self.config.min_length
             }
+            self._log_decision(text, 0.0, 0.0, 0.0, result["decision"],
+                              reason_override=result["reason"])
+            return result
         if len(text) > self.config.max_length:
-            return {
+            result = {
                 "decision": "skip",
                 "reason": "text_too_long",
                 "text_length": len(text),
                 "max_length": self.config.max_length
             }
+            self._log_decision(text, 0.0, 0.0, 0.0, result["decision"],
+                              reason_override=result["reason"])
+            return result
         
         # Diversity-Check: repetitive Texte (z.B. "aaa...", "test test...") skippen
         diversity = self._character_diversity(text)
         if diversity < self.config.min_diversity:
-            return {
+            result = {
                 "decision": "skip",
                 "reason": "too_repetitive",
                 "character_diversity": diversity,
                 "threshold": self.config.min_diversity
             }
+            self._log_decision(text, 0.0, 0.0, 0.0, result["decision"],
+                              reason_override=result["reason"])
+            return result
         
         # Calculate individual scores
         text_entropy = self.calculate_char_entropy(text)
@@ -281,13 +290,16 @@ class EntropyGate:
             "reason": f"Composite score {composite_score:.3f} {'meets' if decision == 'extract' else 'does not meet'} threshold {threshold:.3f}"
         }
 
-    def _log_decision(self, text: str, entropy: float, novelty: float, composite_score: float, decision: str):
+    def _log_decision(self, text: str, entropy: float, novelty: float, composite_score: float, decision: str, reason_override: Optional[str] = None):
         """Log the entropy gate decision to database"""
         try:
             content_hash = self._hash_content(text)
             decision_escaped = self._escape_surrealql(decision)
             threshold = self._get_adaptive_threshold()
-            reason = f"Composite score {composite_score:.3f} {'meets' if decision == 'extract' else 'does not meet'} threshold {threshold:.3f}"
+            if reason_override:
+                reason = reason_override
+            else:
+                reason = f"Composite score {composite_score:.3f} {'meets' if decision == 'extract' else 'does not meet'} threshold {threshold:.3f}"
             reason_escaped = self._escape_surrealql(reason)
             sql = f"""
             CREATE gate_log SET 
