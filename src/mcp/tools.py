@@ -792,8 +792,8 @@ async def list_entities(
         type_escaped = escape_surrealql(type)
         filters.append(f"type = '{type_escaped}'")
     if name_contains:
-        nc_escaped = escape_surrealql(name_contains)
-        filters.append(f"name CONTAINS '{nc_escaped}'")
+        nc_escaped = escape_surrealql(name_contains.lower())
+        filters.append(f"string::lowercase(name) CONTAINS '{nc_escaped}'")
     where = " AND ".join(filters)
 
     sql = f"""
