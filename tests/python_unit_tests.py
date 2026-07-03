@@ -5,7 +5,7 @@ Testing individual Python components and their functions
 import unittest
 import asyncio
 from src.extraction.classifier import QueryClassifier
-from src.router.policy import RoutingPolicy
+from src.router.policy import BudgetLevel, QueryType, RoutingPolicy
 from src.planner.executor import PlanExecutor, RetrievalExecutor
 from src.maintenance.conservative_maintainer import ConservativeMaintainer
 from src.extraction.entropy_gate import EntropyGate, EntropyGateConfig
@@ -65,40 +65,40 @@ class TestRoutingPolicy(unittest.TestCase):
         self.policy = RoutingPolicy()
 
     def test_temporal_policy(self):
-        """Test routing policy for temporal queries"""
-        strategy = self.policy.get_strategy("temporal", 0.9)
-        self.assertEqual(strategy["strategy"], "hybrid_bm25_vector_temporal")
-        self.assertEqual(strategy["cost_budget"], "medium")
+        """Test routing policy for temporal queries (min_confidence=0.5)"""
+        strategy_name, budget_level, policy_applied = self.policy.get_strategy(QueryType.TEMPORAL, 0.9)
+        self.assertEqual(policy_applied, "strict")
+        self.assertIs(budget_level, BudgetLevel.MEDIUM)
 
     def test_factual_policy(self):
-        """Test routing policy for factual queries"""
-        strategy = self.policy.get_strategy("factual", 0.8)
-        self.assertEqual(strategy["strategy"], "hybrid_bm25_vector_temporal")
-        self.assertEqual(strategy["cost_budget"], "medium")
+        """Test routing policy for factual queries (min_confidence=0.4)"""
+        strategy_name, budget_level, policy_applied = self.policy.get_strategy(QueryType.FACTUAL, 0.8)
+        self.assertEqual(policy_applied, "strict")
+        self.assertIs(budget_level, BudgetLevel.HIGH)
 
     def test_multi_hop_policy(self):
-        """Test routing policy for multi-hop queries"""
-        strategy = self.policy.get_strategy("multi-hop", 0.7)
-        self.assertEqual(strategy["strategy"], "hybrid_with_graph_expansion")
-        self.assertEqual(strategy["cost_budget"], "high")
+        """Test routing policy for multi-hop queries (min_confidence=0.8 → 0.7 triggers fallback)"""
+        strategy_name, budget_level, policy_applied = self.policy.get_strategy(QueryType.MULTI_HOP, 0.7)
+        self.assertEqual(strategy_name, "hybrid_fallback")
+        self.assertEqual(policy_applied, "fallback")
 
     def test_conversational_policy(self):
-        """Test routing policy for conversational queries"""
-        strategy = self.policy.get_strategy("conversational", 0.9)
-        self.assertEqual(strategy["strategy"], "composite_kg_vector")
-        self.assertEqual(strategy["cost_budget"], "medium")
+        """Test routing policy for conversational queries (min_confidence=0.6)"""
+        strategy_name, budget_level, policy_applied = self.policy.get_strategy(QueryType.CONVERSATIONAL, 0.9)
+        self.assertEqual(policy_applied, "strict")
+        self.assertIs(budget_level, BudgetLevel.MEDIUM)
 
     def test_update_policy(self):
-        """Test routing policy for update queries"""
-        strategy = self.policy.get_strategy("update", 0.8)
-        self.assertEqual(strategy["strategy"], "knowledge_graph_with_invalidation")
-        self.assertEqual(strategy["cost_budget"], "high")
+        """Test routing policy for update queries (min_confidence=0.9 → 0.8 triggers fallback)"""
+        strategy_name, budget_level, policy_applied = self.policy.get_strategy(QueryType.UPDATE, 0.8)
+        self.assertEqual(strategy_name, "hybrid_fallback")
+        self.assertEqual(policy_applied, "fallback")
 
     def test_low_confidence_fallback(self):
         """Test that low confidence triggers fallback strategy"""
-        strategy = self.policy.get_strategy("temporal", 0.3)
-        self.assertEqual(strategy["strategy"], "hybrid_fallback")
-        self.assertEqual(strategy["cost_budget"], "medium")
+        strategy_name, budget_level, policy_applied = self.policy.get_strategy(QueryType.TEMPORAL, 0.3)
+        self.assertEqual(strategy_name, "hybrid_fallback")
+        self.assertEqual(policy_applied, "fallback")
 
 
 class TestPlanExecutor(unittest.TestCase):
@@ -107,17 +107,14 @@ class TestPlanExecutor(unittest.TestCase):
 
     def test_plan_creation(self):
         """Test that plan executor can create a basic plan"""
-        plan = {
-            "query": "Who is my main contact?",
-            "strategy": "knowledge_graph_first"
-        }
-        result = self.executor.execute_plan(plan)  # Removed asyncio.run since execute_plan is synchronous
-        # Note: The actual result structure may differ from what the test expects
-        # The test expectations below might need to be adjusted based on actual implementation
-        # self.assertIn("strategy_used", result)  # May need to adjust based on actual result structure
-        # self.assertIn("results", result)       # May need to adjust based on actual result structure
-        # self.assertIn("execution_time", result) # May need to adjust based on actual result structure
-        self.assertIsNotNone(result)  # At least verify we get some result back
+        result = asyncio.run(self.executor.execute_plan(
+            strategy="knowledge_graph_first",
+            query="Who is my main contact?",
+            budget_level="medium",
+        ))
+        self.assertIsNotNone(result)
+        self.assertIsInstance(result, dict)
+        self.assertIn("execution_metadata", result)
 
 
 class TestEntropyGate(unittest.TestCase):

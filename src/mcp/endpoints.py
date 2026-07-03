@@ -72,17 +72,13 @@ async def plan_and_execute_endpoint(request_data: dict):
         q_type_enum = QueryType.FACTUAL
     strategy_name, budget_level, policy_applied = policy.get_strategy(q_type_enum, confidence)
 
-    # Create a plan
-    plan = {
-        "query": query,
-        "strategy": strategy_name,
-        "classification": {"type": query_type_str, "confidence": confidence},
-    }
+    budget_str = budget_level.value if hasattr(budget_level, "value") else str(budget_level)
 
-    # Execute the plan (using run_in_executor to avoid blocking)
-    import asyncio
-    loop = asyncio.get_event_loop()
-    result = await loop.run_in_executor(None, executor.execute_plan, plan)
+    result = await executor.execute_plan(
+        strategy=strategy_name,
+        query=query,
+        budget_level=budget_str,
+    )
 
     return result
 

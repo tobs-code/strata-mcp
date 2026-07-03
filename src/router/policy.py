@@ -112,7 +112,7 @@ class RoutingPolicy:
     Now incorporates adaptive cost-awareness using CostTracker metrics.
     """
     
-    def __init__(self):
+    def __init__(self, config: Optional[Dict[str, Dict[str, Any]]] = None):
         # Thread safety for concurrent access
         self._lock = threading.RLock()
         
@@ -153,6 +153,16 @@ class RoutingPolicy:
             }
         }
         
+        # Übernahme Custom-Konfiguration falls übergeben
+        if config:
+            for qt_key, cfg in config.items():
+                try:
+                    qt = QueryType(qt_key) if isinstance(qt_key, str) else qt_key
+                    if qt in self.config:
+                        self.config[qt].update(cfg)
+                except (ValueError, KeyError):
+                    logging.warning(f"Ignoring unknown query type in custom config: {qt_key}")
+
         # Cleanup interval for usage tracking (avoid memory leaks)
         self._cleanup_interval = timedelta(minutes=30)
         self._last_cleanup = datetime.now()
@@ -220,10 +230,18 @@ class RoutingPolicy:
     def get_strategy(self, query_type: QueryType, confidence: float) -> Tuple[str, BudgetLevel, str]:
         """
         Determine the optimal strategy based on query type, confidence, and learned effectiveness.
+        Accepts both QueryType enums and their string values.
         
         Returns:
             Tuple of (strategy, budget_level, policy_applied)
         """
+        if isinstance(query_type, str):
+            try:
+                query_type = QueryType(query_type)
+            except ValueError:
+                logging.warning(f"Unknown query type string '{query_type}', falling back to FACTUAL")
+                query_type = QueryType.FACTUAL
+
         with self._lock:
             # Perform periodic cleanup
             self._cleanup_old_usage()

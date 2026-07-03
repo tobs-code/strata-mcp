@@ -1,6 +1,6 @@
 # MCP Server — Sieveon Memory Stack
 
-The MCP Server exposes the entire STRATA Memory Stack as a standardized tool interface via the [Model Context Protocol (MCP)](https://modelcontextprotocol.io). Any MCP-compatible client (e.g. Claude Desktop, Cursor, VS Code with MCP extension) can call all 13 memory tools directly — without hosting the stack itself.
+The MCP Server exposes the entire Sieveon Memory Stack as a standardized tool interface via the [Model Context Protocol (MCP)](https://modelcontextprotocol.io). Any MCP-compatible client (e.g. Claude Desktop, Cursor, VS Code with MCP extension) can call all 13 memory tools directly — without hosting the stack itself.
 
 ## Architecture Overview
 
@@ -17,7 +17,7 @@ The MCP Server exposes the entire STRATA Memory Stack as a standardized tool int
 │         │               │               │            │      │
 │         ▼               ▼               ▼            ▼      │
 │  ┌────────────────────────────────────────────────────────┐ │
-│  │              STRATA Memory Stack (Python)                │ │
+│  │              Sieveon Memory Stack (Python)                │ │
 │  │  Classifier → Router → Planner → RetrievalExecutor     │ │
 │  │  EntropyGate → EmbeddingService → ConservativeMaint.   │ │
 │  └──────────────────────────┬─────────────────────────────┘ │
@@ -76,7 +76,7 @@ docker-compose up -d
 Verify the container is running:
 
 ```bash
-docker ps --filter "name=strata-surrealdb"
+docker ps --filter "name=Sieveon-surrealdb"
 ```
 
 SurrealDB is then reachable at `http://127.0.0.1:8000` with credentials `root` / `root`.
@@ -92,7 +92,7 @@ The script loads in order:
 - `docs/helper_functions.surql` — DB-side functions (`fn::active_fact`, `fn::facts_at`, …)
 - `docs/test_data.surql` — sample data (Alice, Acme Corp, …)
 
-**Important:** The loader automatically prepends `USE NS strata DB strata;` to each batch and strips inline comments so SurrealDB 3 executes statements correctly.
+**Important:** The loader automatically prepends `USE NS Sieveon DB Sieveon;` to each batch and strips inline comments so SurrealDB 3 executes statements correctly.
 
 ### 3. Start MCP Server
 
@@ -109,12 +109,12 @@ The server speaks MCP over stdin/stdout. Most MCP clients start the server as a 
 ```json
 {
   "mcpServers": {
-    "STRATA-memory": {
+    "Sieveon-memory": {
       "command": "python",
       "args": ["-m", "src.mcp.server"],
-      "cwd": "C:\\workspace\\STRATA",
+      "cwd": "C:\\workspace\\Sieveon",
       "env": {
-        "PYTHONPATH": "C:\\workspace\\STRATA"
+        "PYTHONPATH": "C:\\workspace\\Sieveon"
       }
     }
   }
@@ -128,7 +128,7 @@ In `.cursor/mcp.json` or via the VS Code MCP extension:
 ```json
 {
   "servers": {
-    "STRATA-memory": {
+    "Sieveon-memory": {
       "type": "stdio",
       "command": "python",
       "args": ["-m", "src.mcp.server"],
@@ -142,7 +142,7 @@ In `.cursor/mcp.json` or via the VS Code MCP extension:
 
 ### Layer 1 — Core Memory Operations
 
-The three core tools an STRATA needs 90% of the time in daily operation.
+The three core tools an Sieveon needs 90% of the time in daily operation.
 
 #### `memory_store`
 
@@ -584,7 +584,7 @@ File: `src/mcp/server.py`
 
 **Framework:** [FastMCP](https://github.com/jlowin/fastmcp) — official Python implementation of Anthropic's Model Context Protocol SDK.
 
-**SurrealDB Access:** Direct via HTTP SQL endpoint (`http://127.0.0.1:8000/sql`) with Basic Auth (`root`/`root`). Each SQL batch is prefixed with `USE NS strata DB strata;` to prevent statements from targeting an empty namespace.
+**SurrealDB Access:** Direct via HTTP SQL endpoint (`http://127.0.0.1:8000/sql`) with Basic Auth (`root`/`root`). Each SQL batch is prefixed with `USE NS Sieveon DB Sieveon;` to prevent statements from targeting an empty namespace.
 
 **Embedding Service:** `SentenceTransformer` with model `sentence-transformers/all-MiniLM-L6-v2` (384 dimensions, CUDA if available). The model is loaded lazily and cached. Query embeddings are LRU-cached with a capacity of 128 entries.
 
@@ -661,7 +661,7 @@ python scripts/load_schema_optimized.py
 SurrealDB container is not running or port 8000 is blocked:
 
 ```bash
-docker ps --filter "name=strata-surrealdb"
+docker ps --filter "name=Sieveon-surrealdb"
 # If not running:
 docker-compose up -d
 ```
@@ -721,4 +721,3 @@ The HNSW index `event_embedding_vec` is defined on the `embedding` field with `D
 - [ ] Batch `memory_store` for bulk ingestion
 - [ ] Streaming responses for large retrieval results
 - [ ] Connect eval harness to MCP tools
-

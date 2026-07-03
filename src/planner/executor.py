@@ -512,7 +512,7 @@ class RetrievalExecutor:
                 seen_ids.add(eid)
                 ev["_rrf"] = 1.0 / (k + len(ftx_events) + rank)
                 fused.append(ev)
-            elif eid in [x.get("id") for x in fused]:
+            elif eid in seen_ids:
                 for x in fused:
                     if x.get("id") == eid:
                         x["_rrf"] = x.get("_rrf", 0) + 1.0 / (k + rank)

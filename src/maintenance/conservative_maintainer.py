@@ -32,7 +32,7 @@ SURREAL_AUTH = (
     os.getenv("SURREALDB_PASS", "root"),
 )
 SURREAL_NS = os.getenv("SURREALDB_NS", "sieveon")
-SUREAL_DB = os.getenv("SURREALDB_DB", "sieveon")
+SURREAL_DB = os.getenv("SURREALDB_DB", "sieveon")
 
 
 async def _query_surreal(sql: str) -> Any:
@@ -40,7 +40,7 @@ async def _query_surreal(sql: str) -> Any:
         "Accept": "application/json",
         "Content-Type": "application/json",
     }
-    full_sql = f"USE NS {SURREAL_NS} DB {SUREAL_DB};\n{sql}"
+    full_sql = f"USE NS {SURREAL_NS} DB {SURREAL_DB};\n{sql}"
     async with httpx.AsyncClient() as client:
         response = await client.post(
             SURREAL_URL,

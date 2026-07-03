@@ -42,8 +42,7 @@ async def _store_content(content: str, source: str = "user_input", debug: bool =
 
     from src.extraction.entropy_gate import EntropyGate
     gate = EntropyGate()
-    # Quick gate check for the response (ingest() calls should_extract internally too)
-    gate_result = gate.should_extract(content)
+    gate_result = await asyncio.to_thread(gate.should_extract, content)
     event_id = await asyncio.to_thread(gate.ingest, content, source, debug=False, metadata=metadata)
 
     if event_id is None:

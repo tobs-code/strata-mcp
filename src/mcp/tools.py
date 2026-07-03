@@ -301,9 +301,14 @@ async def kg_query(
 
     # Only show active facts (not invalidated)
     valid_filter = "WHERE (valid_until IS NONE OR valid_until > time::now())"
+
+    extra_clauses_stripped = ""
     if extra_clauses:
-        # Replace initial WHERE with AND since we already have valid_filter
-        extra_clauses = extra_clauses.replace("WHERE", "AND", 1) if "WHERE" in extra_clauses else extra_clauses
+        extra_clauses_stripped = extra_clauses.lstrip()
+        if extra_clauses_stripped.upper().startswith("WHERE"):
+            extra_clauses_stripped = extra_clauses_stripped[5:].lstrip()
+        if extra_clauses_stripped:
+            extra_clauses_stripped = f"AND {extra_clauses_stripped}"
 
     sql = f"""
     SELECT
@@ -316,7 +321,7 @@ async def kg_query(
         out.id AS out_id,
         predicate, confidence, valid_from, valid_until
     FROM fact
-    {valid_filter} {extra_clauses}
+    {valid_filter} {extra_clauses_stripped}
     ORDER BY confidence DESC
     LIMIT 100;
     """

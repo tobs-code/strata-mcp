@@ -20,7 +20,6 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # Import our embedding service
-import os
 import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
@@ -40,6 +39,7 @@ def escape_surrealql(value: str) -> str:
 
     value = value.replace("\\", "\\\\")
     value = value.replace("'", "\\'")
+    value = value.replace("}", "\\}")
     value = value.replace("\n", "\\n")
     value = value.replace("\r", "\\r")
     value = value.replace("\t", "\\t")
@@ -459,13 +459,18 @@ class EntropyGate:
         return list(candidates)
 
     def _compute_relation_confidence(
-        self, text: str, entity_a: str, entity_b: str
+        self, text: str, entity_a: str, entity_b: str,
+        emb_a: Optional[List[float]] = None,
+        emb_b: Optional[List[float]] = None,
     ) -> tuple[str, float]:
-        """Berechne dynamische Konfidenz und Relationstyp zwischen zwei Entities basierend auf Embedding."""
+        """Berechne dynamische Konfidenz und Relationstyp zwischen zwei Entities basierend auf Embedding.
+        Wenn emb_a/emb_b übergeben werden, werden diese genutzt (erspart wiederholte Embedding-Calls)."""
         emb_service = self.embedding_service
         try:
-            emb_a = emb_service.embed_for_storage(entity_a)
-            emb_b = emb_service.embed_for_storage(entity_b)
+            if emb_a is None:
+                emb_a = emb_service.embed_for_storage(entity_a)
+            if emb_b is None:
+                emb_b = emb_service.embed_for_storage(entity_b)
             dot = sum(a * b for a, b in zip(emb_a, emb_b))
             norm = (sum(a * a for a in emb_a) ** 0.5) * (
                 sum(b * b for b in emb_b) ** 0.5
@@ -494,11 +499,8 @@ class EntropyGate:
         works_verbs = ["works at", "works for", "employed by", "joined", "led by"]
         for verb in works_verbs:
             if verb in lower_text:
-                if (
-                    a_lower in lower_text.split(verb)[0]
-                    if verb in lower_text
-                    else False
-                ):
+                parts = lower_text.split(verb, 1)
+                if len(parts) >= 2 and a_lower in parts[0]:
                     if validate_predicate(a_type, "works_at", b_type):
                         return "works_at"
 
@@ -940,10 +942,11 @@ class EntropyGate:
                     and confidence >= 0.4
                 ):
                     try:
+                        source_event_escaped = self._escape_surrealql(event_id)
                         relate_sql = f"""
                         RELATE {entity_ids[subject_idx]}->fact->{entity_ids[obj_idx]}
                         SET predicate = '{predicate}',
-                            source_event = {event_id},
+                            source_event = <record>`{source_event_escaped}`,
                             confidence = {confidence:.4f};
                         """
                         relate_result = self._query_surreal(relate_sql)
@@ -980,6 +983,22 @@ class EntropyGate:
             sentences = re.split(r"(?<=[.!?])\s+", text)
             paired = set()
 
+            # Embeddings für alle Entities vorberechnen (einmal statt pro Paar)
+            entity_embeddings = {}
+            for name in subset_names:
+                try:
+                    entity_embeddings[name] = self.embedding_service.embed_for_storage(name)
+                except Exception:
+                    pass
+
+            # SVO-Triples einmal vor der Schleife cachen
+            svo_triples = None
+            try:
+                from src.extraction.entity_utils import extract_triples
+                svo_triples = extract_triples(text)
+            except ImportError:
+                pass
+
             for sentence in sentences:
                 sentence_lower = sentence.lower()
                 indices_in_sentence = [
@@ -999,12 +1018,9 @@ class EntropyGate:
                             continue
                         paired.add(pair_key)
 
-                        # Prüfen ob dieses Paar bereits SVO-Fact hat
+                        # Prüfen ob dieses Paar bereits SVO-Fact hat (nutzt gecachte Triples)
                         has_svo_fact = False
-                        try:
-                            from src.extraction.entity_utils import extract_triples
-
-                            svo_triples = extract_triples(text)
+                        if svo_triples:
                             for triple in svo_triples:
                                 subj = triple["subject"]
                                 obj = triple["object"]
@@ -1017,14 +1033,14 @@ class EntropyGate:
                                 ):
                                     has_svo_fact = True
                                     break
-                        except ImportError:
-                            pass
 
                         if not has_svo_fact:
                             try:
                                 predicate, base_conf = (
                                     self._compute_relation_confidence(
-                                        text, subset_names[idx_a], subset_names[idx_b]
+                                        text, subset_names[idx_a], subset_names[idx_b],
+                                        emb_a=entity_embeddings.get(subset_names[idx_a]),
+                                        emb_b=entity_embeddings.get(subset_names[idx_b]),
                                     )
                                 )
 
@@ -1043,10 +1059,11 @@ class EntropyGate:
                                 )
 
                                 if confidence >= 0.55:
+                                    source_event_escaped = self._escape_surrealql(event_id)
                                     relate_sql = f"""
                                     RELATE {subset_ids[idx_a]}->fact->{subset_ids[idx_b]}
                                     SET predicate = '{predicate}',
-                                        source_event = {event_id},
+                                        source_event = <record>`{source_event_escaped}`,
                                         confidence = {confidence:.4f};
                                     """
                                     relate_result = self._query_surreal(relate_sql)
@@ -1064,8 +1081,9 @@ class EntropyGate:
 
         for eid in entity_ids:
             try:
+                event_escaped = self._escape_surrealql(event_id)
                 relate_sql = f"""
-                RELATE {event_id}->fact->{eid}
+                RELATE <record>`{event_escaped}`->fact->{eid}
                 SET predicate = 'mentions',
                     confidence = 0.8;
                 """
