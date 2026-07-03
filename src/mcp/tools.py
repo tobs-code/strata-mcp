@@ -718,7 +718,7 @@ async def memory_unforget(
                 "message": f"Event {event_id} not found – nothing to restore",
             }
 
-        update_sql = f"UPDATE {event_id} SET forgotten = NONE, forgotten_reason = NONE;"
+        update_sql = f"UPDATE {event_id} SET forgotten = false, forgotten_reason = NONE;"
         await _query_surreal(update_sql)
         return {"status": "restored", "event_id": event_id}
     except Exception as e:
