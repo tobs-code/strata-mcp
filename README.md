@@ -34,6 +34,7 @@ Strata is an agent memory system that intelligently classifies, routes, plans, a
 |-----------|------|-------------|
 | **MCP Server** | `src/mcp/server.py` | Control plane (Anthropic MCP protocol) — stdio mode. 13 tools: `memory_store`, `memory_query`, `memory_update`, `memory_forget`, `memory_unforget`, `memory_consolidate`, `event_log_search`, `kg_query`, `semantic_search`, `list_entities`, `list_events`, `memory_stats`, `explain_routing` |
 | **Extraction** | `src/extraction/` | Entropy-gated entity extraction with Groq API (llama-3.1-8b-instant) or spaCy fallback. Pipe-separated LLM prompt, type preservation |
+| **Migrations** | `src/mcp/migrations.py` | Versionierte Automatic Data Migration für breaking schema changes |
 | **Router** | `src/router/` | Policy engine & cost tracking |
 | **Planner** | `src/planner/` | Execution engine |
 | **Maintenance** | `src/maintenance/` | Conservative maintainer |
@@ -137,6 +138,8 @@ composite = alpha * normalized_text_entropy + beta * embedding_novelty
 
 **Decision:** `extract` if `composite >= threshold`, otherwise `ignore`.
 
+**Diversity guardrails (pre-filter):** Kurztexte (≤150 Zeichen) werden auf `character_diversity < 0.15` geprüft; längere Texte auf `word_diversity < 0.20`. Dies verhindert Noise ("aaaa...", "test test...") während normale englische Texte jeder Länge passieren.
+
 **Length guardrails:** texts shorter than `min_length = 10` or longer than `max_length = 1000` characters are always skipped.
 
 **Storage contract:** Every input is still written to the immutable Raw Event Log. The gate only controls whether the content is additionally extracted into the temporal Knowledge Graph.
@@ -180,10 +183,23 @@ Budgets are **measured, enforced, and adaptively scaled** per execution.
 
 ## Schema Evolution / Migration
 
-- Schema files live in `docs/*.surql`.
-- `docs/schema.surql` uses `DEFINE TABLE IF NOT EXISTS`, `DEFINE INDEX IF NOT EXISTS`, and `DEFINE FIELD IF NOT EXISTS` — so repeated loads are idempotent.
-- **There is no automatic data migration** for breaking schema changes (e.g. renaming fields or changing types). In that case, export (`surreal export` or custom scripts), transform, and re-import into a new namespace/DB.
-- Non-breaking additive changes: just add new fields/tables and deploy.
+Breaking schema changes (renaming fields, changing types) werden **automatisch** über das versionierte Migrations-System ausgerollt.
+
+- **Engine:** `src/mcp/migrations.py` — `MigrationEngine` mit Registry-Muster
+- **Tracking:** Die Tabelle `_schema_migrations` in SurrealDB speichert angewandte Versionen (inkl. Checksum)
+- **Autostart:** `ensure_schema_loaded()` in `src/mcp/core.py` ruft Migrationen beim Serverstart auf
+- **Neue Migration hinzufügen:** in `_register_builtin()` eintragen:
+
+```python
+engine.register(Migration(
+    version=2,
+    description="Rename field X to Y on table Z",
+    apply_fn=_m002_rename_x_to_y,
+))
+```
+
+- `docs/schema.surql` ist die kanonische Referenz für Neuanlagen (Baseline). Änderungen werden dort dokumentiert und als Migrationsschritt versioniert.
+- Non-breaking additive changes (neue Felder/Tabellen): via `docs/schema.surql` deployen (`IF NOT EXISTS` schützt vor Duplikaten).
 
 ---
 
@@ -191,10 +207,12 @@ Budgets are **measured, enforced, and adaptively scaled** per execution.
 
 | Table | Type | Purpose |
 |-------|------|---------|
-| `event` | NORMAL | Raw event log (content, timestamp) |
-| `entity` | SCHEMAFULL | Knowledge graph entities (name) |
-| `fact` | NORMAL | Relations between entities (subject, object, predicate) |
-| `gate_log` | SCHEMAFULL | Entropy gate decisions |
+| `event` | SCHEMALESS | Raw event log (content, source, embedding, timestamp) |
+| `entity` | SCHEMAFULL | Knowledge graph entities (name, type, embedding) |
+| `fact` | SCHEMALESS | Relations between entities (subject → predicate → object) |
+| `gate_log` | SCHEMAFULL | Entropy gate decisions (composite score, threshold, reason) |
+| `retrieval_cache` | SCHEMALESS | Hybrid search result cache (query_hash, result, ttl) |
+| `_schema_migrations` | SCHEMAFULL | Applied migration versions (version, description, checksum) |
 
 ---
 
