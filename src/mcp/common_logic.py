@@ -249,17 +249,21 @@ def _synthesize_answer(query: str, entities: List[Dict], facts: List[Dict], even
 
     import re
     query_lower = query.lower()
+    query_words = [w for w in re.findall(r'\b\w+\b', query_lower) if len(w) > 2]
     for ev in events[:5]:
         content = ev.get("content", "")
         if content:
             score = 0
-            for word in re.findall(r'\b\w+\b', query_lower):
+            matched = set()
+            for word in query_words:
                 if word.lower() in content.lower():
                     score += 1
+                    matched.add(word)
             if score > 0:
                 event_snippets.append({
-                    "content": content[:200],
+                    "content": content[:400],
                     "relevance_hits": score,
+                    "matched_terms": sorted(matched),
                     "source": ev.get("source", ""),
                     "timestamp": ev.get("timestamp", ""),
                 })
@@ -275,8 +279,21 @@ def _synthesize_answer(query: str, entities: List[Dict], facts: List[Dict], even
 
     has_content = bool(key_facts or key_entities or event_snippets)
 
+    # Build a concise natural-language summary
+    text_parts = []
+    if key_facts:
+        text_parts.append(". ".join(key_facts[:3]))
+    if key_entities:
+        text_parts.append("Related entities: " + ", ".join(key_entities[:5]))
+    if event_snippets:
+        best = event_snippets[0]
+        text_parts.append(f"Best match: \"{best['content'][:150]}...\" (source: {best['source']}, hits: {best['relevance_hits']})")
+
+    answer_text = ". ".join(text_parts) if text_parts else ""
+
     return {
         "found": has_content,
+        "answer": answer_text,
         "parts": answer_parts,
         "total_facts": len(facts),
         "total_entities": len(entities),
