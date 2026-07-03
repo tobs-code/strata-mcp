@@ -34,13 +34,23 @@ async def route_endpoint(query: str = Query(..., description="The query to route
     classifier = QueryClassifier()
     policy = RoutingPolicy()
 
-    query_type, confidence = classifier.classify(query)
-    strategy = policy.get_strategy(query_type, confidence)
+    query_type_str, confidence = classifier.classify(query)
+    # Convert string to QueryType enum
+    from src.router.policy import QueryType
+    try:
+        q_type_enum = QueryType(query_type_str)
+    except ValueError:
+        q_type_enum = QueryType.FACTUAL
+    strategy_name, budget_level, policy_applied = policy.get_strategy(q_type_enum, confidence)
 
     return {
         "query": query,
-        "classification": {"type": query_type, "confidence": confidence},
-        "routing_strategy": strategy,
+        "classification": {"type": query_type_str, "confidence": confidence},
+        "routing_strategy": {
+            "strategy": strategy_name,
+            "budget": budget_level.value if hasattr(budget_level, "value") else str(budget_level),
+            "policy_applied": policy_applied,
+        },
     }
 
 
@@ -53,14 +63,20 @@ async def plan_and_execute_endpoint(request_data: dict):
     executor = PlanExecutor()
 
     # Classify and route the query
-    query_type, confidence = classifier.classify(query)
-    strategy_info = policy.get_strategy(query_type, confidence)
+    query_type_str, confidence = classifier.classify(query)
+    # Convert string to QueryType enum
+    from src.router.policy import QueryType
+    try:
+        q_type_enum = QueryType(query_type_str)
+    except ValueError:
+        q_type_enum = QueryType.FACTUAL
+    strategy_name, budget_level, policy_applied = policy.get_strategy(q_type_enum, confidence)
 
     # Create a plan
     plan = {
         "query": query,
-        "strategy": strategy_info["strategy"],
-        "classification": {"type": query_type, "confidence": confidence},
+        "strategy": strategy_name,
+        "classification": {"type": query_type_str, "confidence": confidence},
     }
 
     # Execute the plan (using run_in_executor to avoid blocking)
@@ -131,14 +147,16 @@ async def memory_update_endpoint(request_data: dict):
 @app.get("/memory/event_log_search")
 async def event_log_search_endpoint(
     query: str = Query(..., description="Search query"),
+    limit: int = Query(10, description="Result limit"),
+    offset: int = Query(0, description="Pagination offset"),
     since: Optional[str] = Query(None, description="Start date"),
     until: Optional[str] = Query(None, description="End date"),
-    limit: int = Query(10, description="Result limit"),
+    include_forgotten: bool = Query(False, description="Include forgotten events"),
 ):
     """Direct timeline query without router: hybrid search (BM25 + vector + RRF)."""
     # Import the tool function directly to reuse the logic
     from .tools import event_log_search
-    return await event_log_search(query, limit, since, until)
+    return await event_log_search(query, limit=limit, offset=offset, since=since, until=until, include_forgotten=include_forgotten)
 
 
 @app.get("/kg/query")
