@@ -552,3 +552,15 @@ async def ensure_schema_loaded():
             print(f"[OK] Backfilled timestamps for {count} entities")
     except Exception as e:
         print(f"   [WARN] Timestamp backfill failed (non-fatal): {e}")
+
+    # ── Automatic data migration ──────────────────────────────────────
+    # Apply pending schema/data migrations in version order.
+    try:
+        from src.mcp.migrations import MigrationEngine, _register_builtin
+        engine = MigrationEngine(_query_surreal)
+        _register_builtin(engine)
+        logs = await engine.apply_all()
+        for line in logs:
+            print(f"[MIGRATION] {line}")
+    except Exception as e:
+        print(f"   [WARN] Migration check failed (non-fatal): {e}")

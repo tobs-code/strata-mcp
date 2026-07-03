@@ -2,96 +2,89 @@
 -- SurrealDB 3 Schema: Agent-Native Memory System
 -- Basierend auf Zhou et al. 2026 (arXiv:2606.24775)
 -- ========================================
+-- ⚠️  BREAKING SCHEMA CHANGES
+-- Dieses File ist die kanonische Referenz. Änderungen an bestehenden
+-- Feldern/Tabellen werden über das Migration-System in src/mcp/migrations.py
+-- als versionierte Migrationsschritte ausgerollt. Dieses File dient als
+-- Source of Truth für Neuanlagen ("baseline") und Dokumentation.
+-- ========================================
 
--- Namespace & Database definieren
 USE NS strata DB strata;
 
 -- ========================================
 -- ① Immutable Raw Event Log
 -- ========================================
--- Single Source of Truth für "wann passierte was"
--- Append-Only: Niemals löschen, niemals überschreiben!
-DEFINE TABLE event SCHEMALESS;
-DEFINE FIELD timestamp ON event TYPE datetime DEFAULT time::now();
-DEFINE FIELD source ON event TYPE string;  -- z.B. "user_input", "system_event", "api_response"
-DEFINE FIELD content ON event TYPE string; -- Der rohe Inhalt
-DEFINE FIELD embedding ON event TYPE option<vector(f32, 768)>;
-DEFINE FIELD metadata ON event TYPE option<object>;
-DEFINE FIELD forgotten ON event TYPE bool DEFAULT false;
-DEFINE FIELD forget_reason ON event TYPE option<string>;
-
--- Indizes für den Event Log
-DEFINE INDEX event_timestamp ON event COLUMNS timestamp;
-DEFINE INDEX event_source ON event COLUMNS source;
-DEFINE ANALYZER event_analyzer TOKENIZERS class FILTERS lowercase, ascii, snowball(english);
-DEFINE INDEX event_content_ft ON event FIELDS content FULLTEXT ANALYZER event_analyzer BM25 HIGHLIGHTS;
--- Vector Index für SurrealDB 3 (HNSW statt MTREE, da MTREE in v3 entfernt)
-DEFINE INDEX event_embedding_vec ON event FIELDS embedding HNSW DIMENSION 768 DIST COSINE;
+DEFINE TABLE IF NOT EXISTS event SCHEMALESS;
+DEFINE FIELD IF NOT EXISTS timestamp ON event TYPE datetime DEFAULT time::now();
+DEFINE FIELD IF NOT EXISTS source ON event TYPE string;
+DEFINE FIELD IF NOT EXISTS content ON event TYPE string;
+DEFINE FIELD IF NOT EXISTS embedding ON event TYPE none | array;
+DEFINE FIELD IF NOT EXISTS metadata ON event TYPE none | object;
+DEFINE FIELD IF NOT EXISTS forgotten ON event TYPE bool DEFAULT false;
+DEFINE FIELD IF NOT EXISTS forget_reason ON event TYPE none | string;
+DEFINE FIELD IF NOT EXISTS content_hash ON event TYPE none | string;
+DEFINE INDEX IF NOT EXISTS event_timestamp ON event COLUMNS timestamp;
+DEFINE INDEX IF NOT EXISTS event_source ON event COLUMNS source;
+DEFINE ANALYZER IF NOT EXISTS event_analyzer TOKENIZERS class FILTERS lowercase, ascii, snowball(english);
+DEFINE INDEX IF NOT EXISTS event_content_ft ON event FIELDS content FULLTEXT ANALYZER event_analyzer BM25 HIGHLIGHTS;
+DEFINE INDEX IF NOT EXISTS event_embedding_vec ON event FIELDS embedding HNSW DIMENSION 768 DIST COSINE;
 
 -- ========================================
 -- ② Knowledge Graph mit Temporal Validity
 -- ========================================
--- Fakten als timestamped Triples mit logischer Invalidierung
+DEFINE TABLE IF NOT EXISTS entity SCHEMAFULL;
+DEFINE FIELD IF NOT EXISTS name ON entity TYPE string;
+DEFINE FIELD IF NOT EXISTS type ON entity TYPE string;
+DEFINE FIELD IF NOT EXISTS embedding ON entity TYPE none | array;
+DEFINE FIELD IF NOT EXISTS metadata ON entity TYPE none | object;
+DEFINE FIELD IF NOT EXISTS forgotten ON entity TYPE bool DEFAULT false;
+DEFINE FIELD IF NOT EXISTS forget_reason ON entity TYPE none | string;
+DEFINE FIELD IF NOT EXISTS created_at ON entity TYPE none | datetime DEFAULT time::now();
+DEFINE FIELD IF NOT EXISTS updated_at ON entity TYPE none | datetime DEFAULT time::now();
+DEFINE INDEX IF NOT EXISTS entity_name ON entity COLUMNS name;
+DEFINE INDEX IF NOT EXISTS entity_type ON entity COLUMNS type;
+DEFINE INDEX IF NOT EXISTS entity_embedding_vec ON entity FIELDS embedding HNSW DIMENSION 768 DIST COSINE;
 
--- Entitäten (Knoten)
-DEFINE TABLE entity SCHEMAFULL;
-DEFINE FIELD name ON entity TYPE string;
-DEFINE FIELD type ON entity TYPE string; -- z.B. "person", "organization", "concept"
-DEFINE FIELD embedding ON entity TYPE option<array>; -- For vector similarity search (array of f32)
-DEFINE FIELD metadata ON entity TYPE option<object>;
-DEFINE FIELD forgotten ON entity TYPE bool DEFAULT false;
-DEFINE FIELD forget_reason ON entity TYPE option<string>;
-DEFINE FIELD created_at ON entity TYPE option<datetime> DEFAULT time::now();
-DEFINE FIELD updated_at ON entity TYPE option<datetime> DEFAULT time::now();
-
--- Fakten als Kanten mit Gültigkeitszeitraum
--- Pattern: (subject)-[edge:predicate {valid_from, valid_until}]->(object)
-DEFINE TABLE fact SCHEMALESS;
-DEFINE FIELD in ON fact TYPE option<record(entity)>;
-DEFINE FIELD out ON fact TYPE option<record(entity)>;
-DEFINE FIELD predicate ON fact TYPE string; -- z.B. "works_at", "located_in", "friend_of"
-DEFINE FIELD valid_from ON fact TYPE datetime DEFAULT time::now();
-DEFINE FIELD valid_until ON fact TYPE option<datetime> DEFAULT NONE;
-DEFINE FIELD source_event ON fact TYPE option<record(event)>; -- Verweis auf Ursprung-Event
-DEFINE FIELD confidence ON fact TYPE option<float> DEFAULT 1.0;
-DEFINE FIELD metadata ON fact TYPE option<object>;
-
--- Indizes für den KG
-DEFINE INDEX entity_name ON entity COLUMNS name;
-DEFINE INDEX entity_type ON entity COLUMNS type;
--- Vector Index für Entity-Deduplizierung (Phase 3)
-DEFINE INDEX entity_embedding_vec ON entity FIELDS embedding HNSW DIMENSION 768 DIST COSINE;
-DEFINE INDEX fact_valid ON fact COLUMNS valid_from, valid_until;
-DEFINE INDEX fact_subject ON fact COLUMNS in;
-DEFINE INDEX fact_object ON fact COLUMNS out;
+DEFINE TABLE IF NOT EXISTS fact SCHEMALESS;
+DEFINE FIELD IF NOT EXISTS predicate ON fact TYPE string;
+DEFINE FIELD IF NOT EXISTS valid_from ON fact TYPE datetime DEFAULT time::now();
+DEFINE FIELD IF NOT EXISTS valid_until ON fact TYPE none | datetime;
+DEFINE FIELD IF NOT EXISTS confidence ON fact TYPE none | float DEFAULT 1.0;
+DEFINE FIELD IF NOT EXISTS metadata ON fact TYPE none | object;
+DEFINE INDEX IF NOT EXISTS fact_valid ON fact COLUMNS valid_from, valid_until;
+DEFINE INDEX IF NOT EXISTS fact_subject ON fact COLUMNS in;
+DEFINE INDEX IF NOT EXISTS fact_object ON fact COLUMNS out;
 
 -- ========================================
--- ③ Retrieval Cache (für Hybrid Index)
+-- ③ Retrieval Cache
 -- ========================================
--- Optional, aber nützlich für schnelle Wiederholabfragen
-DEFINE TABLE retrieval_cache SCHEMALESS;
-DEFINE FIELD query_hash ON retrieval_cache TYPE string;
-DEFINE FIELD result ON retrieval_cache TYPE array;
-DEFINE FIELD timestamp ON retrieval_cache TYPE datetime DEFAULT time::now();
-DEFINE FIELD ttl ON retrieval_cache TYPE duration DEFAULT 1h;
-
--- Index für den Cache
-DEFINE INDEX cache_query ON retrieval_cache COLUMNS query_hash;
+DEFINE TABLE IF NOT EXISTS retrieval_cache SCHEMALESS;
+DEFINE FIELD IF NOT EXISTS query_hash ON retrieval_cache TYPE string;
+DEFINE FIELD IF NOT EXISTS result ON retrieval_cache TYPE array;
+DEFINE FIELD IF NOT EXISTS timestamp ON retrieval_cache TYPE datetime DEFAULT time::now();
+DEFINE FIELD IF NOT EXISTS ttl ON retrieval_cache TYPE duration DEFAULT 1h;
+DEFINE INDEX IF NOT EXISTS cache_query ON retrieval_cache COLUMNS query_hash;
 
 -- ========================================
--- ④ Gate Log für Entropy-Gating-Decisions
+-- ④ Gate Log
 -- ========================================
--- Loggt alle Gate-Entscheidungen für spätere Kalibrierung
-DEFINE TABLE gate_log SCHEMAFULL;
-DEFINE FIELD content_hash ON gate_log TYPE string;
-DEFINE FIELD text_score ON gate_log TYPE float; -- Normalisierte Text-Entropy
-DEFINE FIELD novelty ON gate_log TYPE float; -- Embedding-Novelty
-DEFINE FIELD gate_score ON gate_log TYPE float; -- Composite Score
-DEFINE FIELD decision ON gate_log TYPE string; -- "extract" or "skip"
-DEFINE FIELD reason ON gate_log TYPE string; -- Human-readable decision reason
-DEFINE FIELD threshold ON gate_log TYPE float; -- Adaptive threshold used
-DEFINE FIELD ts ON gate_log TYPE datetime DEFAULT time::now();
+DEFINE TABLE IF NOT EXISTS gate_log SCHEMAFULL;
+DEFINE FIELD IF NOT EXISTS content_hash ON gate_log TYPE string;
+DEFINE FIELD IF NOT EXISTS text_score ON gate_log TYPE float;
+DEFINE FIELD IF NOT EXISTS novelty ON gate_log TYPE float;
+DEFINE FIELD IF NOT EXISTS gate_score ON gate_log TYPE float;
+DEFINE FIELD IF NOT EXISTS decision ON gate_log TYPE string;
+DEFINE FIELD IF NOT EXISTS reason ON gate_log TYPE string;
+DEFINE FIELD IF NOT EXISTS threshold ON gate_log TYPE float;
+DEFINE FIELD IF NOT EXISTS ts ON gate_log TYPE datetime DEFAULT time::now();
+DEFINE INDEX IF NOT EXISTS gate_log_ts ON gate_log COLUMNS ts;
+DEFINE INDEX IF NOT EXISTS gate_log_decision ON gate_log COLUMNS decision;
 
--- Index für Gate Log
-DEFINE INDEX gate_log_ts ON gate_log COLUMNS ts;
-DEFINE INDEX gate_log_decision ON gate_log COLUMNS decision;
+-- ========================================
+-- ⑤ Schema Migration Tracking
+-- ========================================
+DEFINE TABLE IF NOT EXISTS _schema_migrations SCHEMAFULL;
+DEFINE FIELD IF NOT EXISTS version ON _schema_migrations TYPE int;
+DEFINE FIELD IF NOT EXISTS description ON _schema_migrations TYPE string;
+DEFINE FIELD IF NOT EXISTS checksum ON _schema_migrations TYPE string;
+DEFINE FIELD IF NOT EXISTS applied_at ON _schema_migrations TYPE datetime DEFAULT time::now();
