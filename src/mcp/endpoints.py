@@ -268,3 +268,14 @@ async def list_events_endpoint(
     """Lists events from the raw event log with filtering and pagination."""
     from .tools import list_events
     return await list_events(limit, offset, since, until, source, include_forgotten)
+
+
+@app.post("/memory/merge_entities")
+async def memory_merge_entities_endpoint(request_data: dict):
+    """Merges all facts from source_entity into target_entity, then forgets the source."""
+    from .tools import memory_merge_entities
+    return await memory_merge_entities(
+        source_entity=request_data.get("source_entity", ""),
+        target_entity=request_data.get("target_entity", ""),
+        dry_run=request_data.get("dry_run", False),
+    )

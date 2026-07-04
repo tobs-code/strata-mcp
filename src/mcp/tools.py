@@ -983,6 +983,141 @@ async def list_entities(
 
 
 @mcp.tool()
+async def memory_merge_entities(
+    source_entity: str,
+    target_entity: str,
+    dry_run: bool = False,
+) -> dict:
+    """Merges all facts from source_entity into target_entity, then forgets the source.
+    Re-links all facts (both in and out positions) to point to target_entity.
+    Use dry_run=True to preview without making changes."""
+    if source_entity == target_entity:
+        return {"status": "error", "message": "source and target must be different"}
+
+    se = escape_surrealql(source_entity)
+    te = escape_surrealql(target_entity)
+
+    # Find both entity IDs
+    src_sql = f"SELECT id, type FROM entity WHERE name = '{se}' LIMIT 1;"
+    tgt_sql = f"SELECT id, type FROM entity WHERE name = '{te}' LIMIT 1;"
+    src_result = await _query_surreal(src_sql)
+    tgt_result = await _query_surreal(tgt_sql)
+    src_entities = _extract_result(src_result, 1)
+    tgt_entities = _extract_result(tgt_result, 1)
+
+    if not src_entities:
+        return {"status": "error", "message": f"Source entity '{source_entity}' not found"}
+    if not tgt_entities:
+        return {"status": "error", "message": f"Target entity '{target_entity}' not found"}
+
+    src_id = src_entities[0]["id"]
+    tgt_id = tgt_entities[0]["id"]
+
+    # Find all active facts where source is involved (match by name, consistent with codebase patterns)
+    facts_sql = f"""
+    SELECT id, predicate, confidence,
+           in.id AS in_id, in.name AS in_name,
+           out.id AS out_id, out.name AS out_name
+    FROM fact
+    WHERE (in.name = '{se}' OR out.name = '{se}')
+      AND (valid_until IS NONE OR valid_until > time::now());
+    """
+    facts_result = await _query_surreal(facts_sql)
+    facts = _extract_result(facts_result, 1)
+
+    if not facts:
+        return {
+            "status": "ok",
+            "source_entity": source_entity,
+            "target_entity": target_entity,
+            "merged_count": 0,
+            "message": "No active facts found for source entity",
+        }
+
+    if dry_run:
+        preview = []
+        for f in facts:
+            role = "in" if f.get("in_id") == src_id else "out"
+            other_side = f.get("out_name") if role == "in" else f.get("in_name")
+            preview.append({
+                "fact_id": f["id"],
+                "predicate": f["predicate"],
+                "role": role,
+                "other_entity": other_side,
+            })
+        return {
+            "status": "dry_run",
+            "source_entity": source_entity,
+            "target_entity": target_entity,
+            "total_facts": len(facts),
+            "preview": preview,
+        }
+
+    merged = 0
+    errors = []
+
+    for fact in facts:
+        try:
+            fact_id = fact["id"]
+            predicate_escaped = escape_surrealql(fact.get("predicate", ""))
+            confidence = fact.get("confidence", 1.0)
+
+            # Determine which side to replace
+            fact_in_id = fact.get("in_id")
+            fact_out_id = fact.get("out_id")
+
+            # Build RELATE with source replaced by target
+            if fact_in_id == src_id:
+                relate_sql = f"RELATE {tgt_id}->fact->{fact_out_id} SET predicate = '{predicate_escaped}', confidence = {confidence};"
+            else:
+                relate_sql = f"RELATE {fact_in_id}->fact->{tgt_id} SET predicate = '{predicate_escaped}', confidence = {confidence};"
+
+            await _query_surreal(relate_sql)
+
+            # Invalidate original fact
+            invalidate_sql = f"UPDATE {fact_id} SET valid_until = time::now(), invalidated_reason = 'merged_into_{te}';"
+            await _query_surreal(invalidate_sql)
+
+            merged += 1
+        except Exception as e:
+            errors.append({"fact_id": fact.get("id"), "error": str(e)})
+
+    # Mark source entity as forgotten
+    if merged > 0:
+        try:
+            forget_sql = f"UPDATE {src_id} SET forgotten = true, forget_reason = 'merged_into_{te}', updated_at = time::now();"
+            await _query_surreal(forget_sql)
+        except Exception as e:
+            errors.append({"type": "forget_source", "error": str(e)})
+
+    # Operation ins Event-Log schreiben
+    try:
+        log_content = f"Merged entity '{source_entity}' into '{target_entity}': {merged} facts re-linked, source forgotten."
+        log_escaped = escape_surrealql(log_content)
+        log_sql = f"""
+        CREATE event SET
+            content = '{log_escaped}',
+            content_hash = '{escape_surrealql(hashlib.md5(log_content.encode()).hexdigest())}',
+            source = 'system_maintenance',
+            metadata = {{"action": "merge_entities", "source": "{se}", "target": "{te}", "source_id": "{src_id}", "target_id": "{tgt_id}", "merged": {merged}, "errors": {len(errors)}}};
+        """
+        await _query_surreal(log_sql)
+    except Exception as e:
+        print(f"[WARN] Failed to write merge event log: {e}")
+
+    return {
+        "status": "ok",
+        "source_entity": source_entity,
+        "target_entity": target_entity,
+        "source_id": src_id,
+        "target_id": tgt_id,
+        "merged_count": merged,
+        "error_count": len(errors),
+        "errors": errors if errors else None,
+    }
+
+
+@mcp.tool()
 async def list_events(
     limit: int = 20,
     offset: int = 0,
