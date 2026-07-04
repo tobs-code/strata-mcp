@@ -1,6 +1,6 @@
 # MCP Server — Sieveon Memory Stack
 
-The MCP Server exposes the entire Sieveon Memory Stack as a standardized tool interface via the [Model Context Protocol (MCP)](https://modelcontextprotocol.io). Any MCP-compatible client (e.g. Claude Desktop, Cursor, VS Code with MCP extension) can call all 14 memory tools directly — without hosting the stack itself.
+The MCP Server exposes the entire Sieveon Memory Stack as a standardized tool interface via the [Model Context Protocol (MCP)](https://modelcontextprotocol.io). Any MCP-compatible client (e.g. Claude Desktop, Cursor, VS Code with MCP extension) can call all 15 memory tools directly — without hosting the stack itself.
 
 ## Architecture Overview
 
@@ -12,7 +12,7 @@ The MCP Server exposes the entire Sieveon Memory Stack as a standardized tool in
 │                    MCP Server (FastMCP)                       │
 │  ┌─────────────┐ ┌─────────────┐ ┌─────────────┐ ┌────────┐│
 │  │   Core      │ │ Primitives  │ │Introspection│ │Maint.  ││
-│  │  (3 Tools)  │ │  (3 Tools)  │ │  (2 Tools)  │ │(2 Tools││
+│  │  (4 Tools)  │ │  (5 Tools)  │ │  (2 Tools)  │ │(3 Tools││
 │  └──────┬──────┘ └──────┬──────┘ └──────┬──────┘ └───┬────┘│
 │         │               │               │            │      │
 │         ▼               ▼               ▼            ▼      │
@@ -210,6 +210,7 @@ The high-level entry point. Classifies the query, selects a retrieval strategy, 
 |-----------|------|----------|-------------|
 | `query` | `string` | yes | Natural language query |
 | `cost_budget` | `string` | no | `"auto"` (default), `"low"`, `"medium"`, `"high"` |
+| `limit` | `int` | no | Max results per category (default: 10) |
 
 **Returns:**
 
@@ -266,7 +267,7 @@ Updates a fact in the Knowledge Graph through logical invalidation. The old fact
 
 ### Layer 2 — Retrieval Primitives
 
-Six tools for direct access to events, entities, and facts — bypasses the router.
+Five tools for direct access to events, entities, and facts — bypasses the router.
 
 #### `event_log_search`
 
@@ -320,6 +321,8 @@ Direct graph traversal query on the temporal Knowledge Graph.
 | `object` | `string` | no | Filter by object name (`out.name`) |
 | `predicate` | `string` | no | Exact predicate |
 | `at_time` | `string` | no | ISO timestamp — returns only facts valid at that time |
+| `limit` | `int` | no | Max facts to return (default: 100) |
+| `offset` | `int` | no | Pagination offset (default: 0) |
 
 **Returns:**
 
@@ -340,7 +343,9 @@ Direct graph traversal query on the temporal Knowledge Graph.
     "subject": "Alice",
     "object": null,
     "predicate": "works_at",
-    "at_time": null
+    "at_time": null,
+    "limit": 100,
+    "offset": 0
   }
 }
 ```
@@ -580,16 +585,57 @@ Manual trigger for Conservative Maintenance — local patches only, no global re
 
 ---
 
+#### `memory_merge_entities`
+
+Merges all active facts from one entity into another, then marks the source as forgotten. Useful for deduplicating entities like `"Python 3.12"` → `"Python"`.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `source_entity` | `string` | yes | Source entity name (will be forgotten) |
+| `target_entity` | `string` | yes | Target entity name (receives the facts) |
+| `dry_run` | `bool` | no | Preview without making changes (default: false) |
+
+**Returns:**
+
+```json
+{
+  "status": "ok",
+  "source_entity": "Python 3.12",
+  "target_entity": "Python",
+  "source_id": "entity:abc",
+  "target_id": "entity:def",
+  "merged_count": 1,
+  "error_count": 0,
+  "errors": null
+}
+```
+
+Dry-run preview:
+
+```json
+{
+  "status": "dry_run",
+  "source_entity": "Python 3.12",
+  "target_entity": "Python",
+  "total_facts": 1,
+  "preview": [
+    {"fact_id": "fact:xyz", "predicate": "related_to", "role": "out", "other_entity": "FastAPI"}
+  ]
+}
+```
+
+---
+
 ## Tool Reference (compact)
 
 | Tool | Layer | Input | Output |
 |------|-------|-------|--------|
 | `memory_store` | Core | `content`, `source?`, `metadata?` | `event_id`, `status`, `gate` |
 | `memory_store_batch` | Core | `items`, `source?` | `results[]`, `errors[]`, `stored`, `failed` |
-| `memory_query` | Core | `query`, `cost_budget?` | `classified_as`, `strategy`, `results` |
+| `memory_query` | Core | `query`, `cost_budget?`, `limit?` | `classified_as`, `strategy`, `results` |
 | `memory_update` | Core | `subject`, `predicate`, `new_value` | `invalidated_fact`, `new_fact` |
 | `event_log_search` | Primitives | `query`, `since?`, `until?`, `limit?`, `offset?`, `include_forgotten?` | `events[]`, `count` |
-| `kg_query` | Primitives | `subject?`, `object?`, `predicate?`, `at_time?` | `facts[]`, `count`, `query_params` |
+| `kg_query` | Primitives | `subject?`, `object?`, `predicate?`, `at_time?`, `limit?`, `offset?` | `facts[]`, `count`, `query_params` |
 | `list_entities` | Primitives | `limit?`, `offset?`, `type?`, `name_contains?`, `sort_by?`, `sort_order?` | `entities[]`, `count`, `total` |
 | `list_events` | Primitives | `limit?`, `offset?`, `since?`, `until?`, `source?`, `include_forgotten?` | `events[]`, `count`, `total` |
 | `semantic_search` | Primitives | `query`, `top_k?` | `events[]`, `count` |
@@ -598,6 +644,7 @@ Manual trigger for Conservative Maintenance — local patches only, no global re
 | `memory_forget` | Maintenance | `event_id?` or `entity?`, `reason?` | `forgotten_items[]`, `count`, `reason` |
 | `memory_unforget` | Maintenance | `event_id` | `status`, `event_id` |
 | `memory_consolidate` | Maintenance | `scope`, `entity?`, `delete_stale?` | `stale_facts_found`, `deleted_count`, `status` |
+| `memory_merge_entities` | Maintenance | `source_entity`, `target_entity`, `dry_run?` | `status`, `merged_count`, `error_count` |
 
 ---
 

@@ -32,7 +32,7 @@ Sieveon is an agent memory system that intelligently classifies, routes, plans, 
 
 | Component | Path | Description |
 |-----------|------|-------------|
-| **MCP Server** | `src/mcp/server.py` | Control plane (Anthropic MCP protocol) — stdio mode. 14 tools: `memory_store`, `memory_store_batch`, `memory_query`, `memory_update`, `memory_forget`, `memory_unforget`, `memory_consolidate`, `event_log_search`, `kg_query`, `semantic_search`, `list_entities`, `list_events`, `memory_stats`, `explain_routing` |
+| **MCP Server** | `src/mcp/server.py` | Control plane (Anthropic MCP protocol) — stdio mode. 15 tools: `memory_store`, `memory_store_batch`, `memory_query`, `memory_update`, `memory_forget`, `memory_unforget`, `memory_consolidate`, `memory_merge_entities`, `event_log_search`, `kg_query`, `semantic_search`, `list_entities`, `list_events`, `memory_stats`, `explain_routing` |
 | **Extraction** | `src/extraction/` | Entropy-gated entity extraction with Groq API (llama-3.1-8b-instant) or spaCy fallback. Pipe-separated LLM prompt, type preservation |
 | **Migrations** | `src/mcp/migrations.py` | Versioned auto-migration engine for breaking schema changes |
 | **Router** | `src/router/` | Policy engine & cost tracking |
