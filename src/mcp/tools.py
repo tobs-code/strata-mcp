@@ -805,7 +805,11 @@ async def memory_forget(
 async def memory_unforget(
     event_id: str,
 ) -> dict:
-    """Restores a previously forgotten event. Resets forgotten=false."""
+    """Restores a previously forgotten event or entity. Resets forgotten=false.
+    When restoring a forgotten entity, also restores all facts that were
+    invalidated alongside it (clears valid_until and invalidated_reason)."""
+    is_entity = str(event_id).startswith("entity:")
+
     try:
         check_sql = f"SELECT id FROM {event_id};"
         check_result = await _query_surreal(check_sql)
@@ -813,16 +817,51 @@ async def memory_unforget(
         if not check_items:
             return {
                 "status": "error",
-                "message": f"Event {event_id} not found – nothing to restore",
+                "message": f"Event/entity {event_id} not found – nothing to restore",
             }
 
+        # 1. Restore the main record (entity or event)
         update_sql = f"UPDATE {event_id} SET forgotten = false, forgotten_reason = NONE;"
         await _query_surreal(update_sql)
-        return {"status": "restored", "event_id": event_id}
+
+        result = {"status": "restored", "event_id": event_id}
+
+        # 2. If it's an entity, also restore all facts invalidated alongside it
+        if is_entity:
+            name_sql = f"SELECT name FROM {event_id};"
+            name_result = await _query_surreal(name_sql)
+            name_items = _extract_result(name_result, 1)
+            if name_items and name_items[0].get("name"):
+                entity_name = name_items[0]["name"]
+                en = escape_surrealql(entity_name)
+
+                facts_sql = f"""
+                SELECT id FROM fact
+                WHERE (in.name = '{en}' OR out.name = '{en}')
+                  AND valid_until IS NOT NONE;
+                """
+                facts_result = await _query_surreal(facts_sql)
+                facts = _extract_result(facts_result, 1) or []
+
+                restored_facts = 0
+                for fact in facts:
+                    fid = fact.get("id")
+                    try:
+                        await _query_surreal(
+                            f"UPDATE {fid} SET valid_until = NONE, invalidated_reason = NONE;"
+                        )
+                        restored_facts += 1
+                    except Exception as e:
+                        print(f"[WARN] Failed to restore fact {fid}: {e}")
+
+                if restored_facts:
+                    result["facts_restored"] = restored_facts
+
+        return result
     except Exception as e:
         return {
             "status": "error",
-            "message": f"Failed to restore event {event_id}: {str(e)}",
+            "message": f"Failed to restore {event_id}: {str(e)}",
         }
 
 

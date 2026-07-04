@@ -230,7 +230,9 @@ async def memory_consolidate_endpoint(request_data: dict):
 
 @app.post("/memory/unforget")
 async def memory_unforget_endpoint(request_data: dict):
-    """Restores a previously forgotten event. Resets forgotten=false."""
+    """Restores a previously forgotten event or entity. Resets forgotten=false.
+    When restoring a forgotten entity, also restores all facts that were
+    invalidated alongside it (clears valid_until and invalidated_reason)."""
     from .tools import memory_unforget
     return await memory_unforget(
         event_id=request_data.get("event_id", "")
