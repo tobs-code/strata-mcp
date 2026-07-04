@@ -1,6 +1,6 @@
 # MCP Server — Sieveon Memory Stack
 
-The MCP Server exposes the entire Sieveon Memory Stack as a standardized tool interface via the [Model Context Protocol (MCP)](https://modelcontextprotocol.io). Any MCP-compatible client (e.g. Claude Desktop, Cursor, VS Code with MCP extension) can call all 13 memory tools directly — without hosting the stack itself.
+The MCP Server exposes the entire Sieveon Memory Stack as a standardized tool interface via the [Model Context Protocol (MCP)](https://modelcontextprotocol.io). Any MCP-compatible client (e.g. Claude Desktop, Cursor, VS Code with MCP extension) can call all 14 memory tools directly — without hosting the stack itself.
 
 ## Architecture Overview
 
@@ -138,11 +138,11 @@ In `.cursor/mcp.json` or via the VS Code MCP extension:
 }
 ```
 
-## The 13 Tools (4 Layers)
+## The 14 Tools (4 Layers)
 
 ### Layer 1 — Core Memory Operations
 
-The three core tools an Sieveon needs 90% of the time in daily operation.
+The four core tools an Sieveon needs 90% of the time in daily operation.
 
 #### `memory_store`
 
@@ -177,6 +177,28 @@ Stores an event in the immutable Raw Event Log. The Entropy Gate later decides w
 ```
 
 The embedding is automatically generated via `sentence-transformers/all-MiniLM-L6-v2` (384 dimensions) and stored as `vector(f32, 384)` in SurrealDB.
+
+---
+
+#### `memory_store_batch`
+
+Stores multiple events in batch. Each item goes through the Entropy Gate independently.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `items` | `array` | yes | List of objects with `content`, optional `source` and `metadata` |
+| `source` | `string` | no | Default source for all items (`"user_input"`) |
+
+**Returns:**
+
+```json
+{
+  "results": [{"index": 0, "event_id": "...", "gate": {...}}, ...],
+  "errors": [{"index": 1, "error": "..."}],
+  "stored": 1,
+  "failed": 1
+}
+```
 
 ---
 
@@ -294,7 +316,8 @@ Direct graph traversal query on the temporal Knowledge Graph.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `subject` | `string` | no | Filter by subject name (substring) |
+| `subject` | `string` | no | Filter by subject name (`in.name`) |
+| `object` | `string` | no | Filter by object name (`out.name`) |
 | `predicate` | `string` | no | Exact predicate |
 | `at_time` | `string` | no | ISO timestamp — returns only facts valid at that time |
 
@@ -315,6 +338,7 @@ Direct graph traversal query on the temporal Knowledge Graph.
   "count": 1,
   "query_params": {
     "subject": "Alice",
+    "object": null,
     "predicate": "works_at",
     "at_time": null
   }
@@ -561,10 +585,11 @@ Manual trigger for Conservative Maintenance — local patches only, no global re
 | Tool | Layer | Input | Output |
 |------|-------|-------|--------|
 | `memory_store` | Core | `content`, `source?`, `metadata?` | `event_id`, `status`, `gate` |
+| `memory_store_batch` | Core | `items`, `source?` | `results[]`, `errors[]`, `stored`, `failed` |
 | `memory_query` | Core | `query`, `cost_budget?` | `classified_as`, `strategy`, `results` |
 | `memory_update` | Core | `subject`, `predicate`, `new_value` | `invalidated_fact`, `new_fact` |
 | `event_log_search` | Primitives | `query`, `since?`, `until?`, `limit?`, `offset?`, `include_forgotten?` | `events[]`, `count` |
-| `kg_query` | Primitives | `subject?`, `predicate?`, `at_time?` | `facts[]`, `count`, `query_params` |
+| `kg_query` | Primitives | `subject?`, `object?`, `predicate?`, `at_time?` | `facts[]`, `count`, `query_params` |
 | `list_entities` | Primitives | `limit?`, `offset?`, `type?`, `name_contains?`, `sort_by?`, `sort_order?` | `entities[]`, `count`, `total` |
 | `list_events` | Primitives | `limit?`, `offset?`, `since?`, `until?`, `source?`, `include_forgotten?` | `events[]`, `count`, `total` |
 | `semantic_search` | Primitives | `query`, `top_k?` | `events[]`, `count` |
@@ -699,7 +724,7 @@ The HNSW index `event_embedding_vec` is defined on the `embedding` field with `D
 
 | File | Purpose |
 |------|---------|
-| `src/mcp/server.py` | MCP server implementation (13 tools) |
+| `src/mcp/server.py` | MCP server implementation (14 tools) |
 | `docs/schema.surql` | SurrealDB schema (Event Log, KG, indexes) |
 | `docs/helper_functions.surql` | DB-side functions |
 | `docs/test_data.surql` | Sample test data |

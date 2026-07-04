@@ -34,12 +34,6 @@ class BudgetTracker:
     def increment_db_calls(self, count: int = 1):
         self.db_calls += count
 
-    def track_db_call(self):
-        self.db_calls += 1
-
-    def track_tokens(self, count: int):
-        self.estimated_tokens += count
-
     def increment_tokens(self, count: int):
         self.estimated_tokens += count
 

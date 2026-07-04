@@ -33,6 +33,34 @@ async def memory_store(
 
 
 @mcp.tool()
+async def memory_store_batch(
+    items: List[Dict[str, Any]],
+    source: str = "user_input",
+) -> dict:
+    """Stores multiple events in batch. Each item must have 'content'. Optional: 'source', 'metadata'."""
+    results = []
+    errors = []
+    for i, item in enumerate(items):
+        try:
+            content = item.get("content", "")
+            if not content:
+                errors.append({"index": i, "error": "missing content"})
+                continue
+            item_source = item.get("source", source)
+            item_metadata = item.get("metadata")
+            result = await _store_content(content, item_source, debug=False, metadata=item_metadata)
+            results.append({"index": i, **result})
+        except Exception as e:
+            errors.append({"index": i, "error": str(e)})
+    return {
+        "results": results,
+        "errors": errors,
+        "stored": len(results),
+        "failed": len(errors),
+    }
+
+
+@mcp.tool()
 async def memory_query(query: str, cost_budget: str = "auto") -> dict:
     """Routes a natural language query through the full pipeline: classify → plan → retrieve."""
     return await _execute_query(query, cost_budget)
@@ -271,17 +299,28 @@ async def event_log_search(
 @mcp.tool()
 async def kg_query(
     subject: Optional[str] = None,
+    object: Optional[str] = None,
     predicate: Optional[str] = None,
     at_time: Optional[str] = None,
 ) -> dict:
-    """Direct graph traversal: query facts by subject/predicate/time.
+    """Direct graph traversal: query facts by subject/object/predicate/time.
     Returns associated entities with their inferred types (e.g., 'organization', 'concept').
-    Searches both directions — 'subject' matches entity name in subject or object position."""
+    - 'subject' matches entity name in subject position (in.name).
+    - 'object' matches entity name in object position (out.name).
+    - If both are provided, finds facts connecting them.
+    - If neither is provided, returns all active facts (use with predicate to narrow)."""
     extra_clauses = ""
 
-    if subject:
-        subject_escaped = escape_surrealql(subject)
-        extra_clauses = f"WHERE (in.name = '{subject_escaped}' OR out.name = '{subject_escaped}')"
+    if subject and object:
+        subj_escaped = escape_surrealql(subject)
+        obj_escaped = escape_surrealql(object)
+        extra_clauses = f"WHERE in.name = '{subj_escaped}' AND out.name = '{obj_escaped}'"
+    elif subject:
+        subj_escaped = escape_surrealql(subject)
+        extra_clauses = f"WHERE in.name = '{subj_escaped}'"
+    elif object:
+        obj_escaped = escape_surrealql(object)
+        extra_clauses = f"WHERE out.name = '{obj_escaped}'"
     if predicate:
         predicate_escaped = escape_surrealql(predicate)
         if extra_clauses:
@@ -371,6 +410,7 @@ async def kg_query(
         "count": len(enhanced_facts),
         "query_params": {
             "subject": subject,
+            "object": object,
             "predicate": predicate,
             "at_time": at_time,
         },

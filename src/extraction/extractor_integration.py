@@ -27,7 +27,7 @@ SURREAL_DB = os.getenv("SURREALDB_DB", "sieveon")
 _shared_async_client = None
 
 
-async def _get_async_client() -> httpx.AsyncClient:
+def _get_async_client() -> httpx.AsyncClient:
     global _shared_async_client
     if _shared_async_client is None:
         _shared_async_client = httpx.AsyncClient(timeout=httpx.Timeout(30.0))
@@ -40,7 +40,7 @@ async def _query_surreal(sql: str) -> Any:
         "Content-Type": "application/json",
     }
     full_sql = f"USE NS {SURREAL_NS} DB {SURREAL_DB};\n{sql}"
-    client = await _get_async_client()
+    client = _get_async_client()
     try:
         response = await client.post(
             SURREAL_URL,

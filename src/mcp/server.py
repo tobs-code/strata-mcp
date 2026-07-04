@@ -94,6 +94,7 @@ __all__ = [
     '_store_content',
     '_execute_query',
     'memory_store',
+    'memory_store_batch',
     'memory_query',
     'memory_update',
     'memory_stats',

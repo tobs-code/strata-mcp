@@ -207,23 +207,44 @@ class ConservativeMaintainer:
             return 0
 
     async def _consolidate_events(self) -> int:
-        """Consolidate similar events that occurred close in time"""
+        """Deduplicate events with identical content_hash within 1-hour windows."""
         try:
-            # Find events with similar content that occurred within a short timeframe
             sql = """
-            SELECT * FROM event
+            SELECT id, content_hash, timestamp, source
+            FROM event
+            WHERE (forgotten IS NONE OR forgotten = false)
             ORDER BY timestamp DESC
-            LIMIT 100;
+            LIMIT 500;
             """
             result = await _query_surreal(sql)
             events = _extract_result(result)
+            if not events:
+                return 0
 
-            # Group similar events and consolidate them
+            from collections import defaultdict
+            buckets = defaultdict(list)
+            for ev in events:
+                key = ev.get("content_hash") or ev.get("content", "")[:50]
+                buckets[key].append(ev)
+
             consolidated_count = 0
+            for key, group in buckets.items():
+                if len(group) < 2:
+                    continue
+                group.sort(key=lambda x: x.get("timestamp", ""), reverse=True)
+                keep = group[0]
+                for dup in group[1:]:
+                    dup_id = dup.get("id")
+                    if not dup_id:
+                        continue
+                    try:
+                        forget_sql = f"UPDATE {dup_id} SET forgotten = true, forgotten_reason = 'consolidated_duplicate';"
+                        await _query_surreal(forget_sql)
+                        consolidated_count += 1
+                    except Exception as e:
+                        print(f"Could not consolidate event {dup_id}: {e}")
 
-            # For now, just return the count of events processed
-            # More sophisticated consolidation would happen here
-            return min(len(events), 10)  # Return a sample number
+            return consolidated_count
 
         except Exception as e:
             print(f"Error consolidating events: {e}")

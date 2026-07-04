@@ -32,7 +32,7 @@ Sieveon is an agent memory system that intelligently classifies, routes, plans, 
 
 | Component | Path | Description |
 |-----------|------|-------------|
-| **MCP Server** | `src/mcp/server.py` | Control plane (Anthropic MCP protocol) — stdio mode. 13 tools: `memory_store`, `memory_query`, `memory_update`, `memory_forget`, `memory_unforget`, `memory_consolidate`, `event_log_search`, `kg_query`, `semantic_search`, `list_entities`, `list_events`, `memory_stats`, `explain_routing` |
+| **MCP Server** | `src/mcp/server.py` | Control plane (Anthropic MCP protocol) — stdio mode. 14 tools: `memory_store`, `memory_store_batch`, `memory_query`, `memory_update`, `memory_forget`, `memory_unforget`, `memory_consolidate`, `event_log_search`, `kg_query`, `semantic_search`, `list_entities`, `list_events`, `memory_stats`, `explain_routing` |
 | **Extraction** | `src/extraction/` | Entropy-gated entity extraction with Groq API (llama-3.1-8b-instant) or spaCy fallback. Pipe-separated LLM prompt, type preservation |
 | **Migrations** | `src/mcp/migrations.py` | Versioned auto-migration engine for breaking schema changes |
 | **Router** | `src/router/` | Policy engine & cost tracking |
@@ -49,7 +49,6 @@ Sieveon is an agent memory system that intelligently classifies, routes, plans, 
 - **Entity Extraction** — Groq API (`llama-3.1-8b-instant`) with spaCy fallback. Pipe-separated LLM prompt, type preservation (LLM classification preferred over heuristic).
 - **Logical Invalidation** — `valid_until` timestamps instead of hard deletes. `memory_update` auto-creates target entities if they don't exist yet.
 - **Forgetting & Consolidation** — `memory_forget` soft-deletes events or entities; `memory_consolidate` triggers maintenance runs (with optional physical stale-fact removal).
-- **Cross-Language Consistency** — Identical classification & routing logic in Rust and Python
 - **Cost Awareness** — Tracks & budgets resource consumption per strategy
 
 ---
@@ -125,7 +124,7 @@ python benchmarks/mcp_performance.py
 
 The gate prevents the Knowledge Graph from being flooded with low-value entries.
 
-**Formula (LightMem-style):**
+**Formula:**
 
 ```
 composite = alpha * normalized_text_entropy + beta * embedding_novelty
@@ -167,7 +166,7 @@ composite = alpha * normalized_text_entropy + beta * embedding_novelty
 
 ## Cost Model & Adaptive Enforcement
 
-Budgets are **measured, enforced, and adaptively scaled** per execution.
+Budgets are measured and enforced per execution, and adaptively scaled based on global system health.
 
 | Budget | Base limit | Strategy examples | Enforcement |
 |--------|------------|-------------------|-------------|

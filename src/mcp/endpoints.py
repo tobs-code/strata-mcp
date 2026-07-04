@@ -118,6 +118,16 @@ async def memory_store_endpoint(request_data: dict):
     )
 
 
+@app.post("/memory/store/batch")
+async def memory_store_batch_endpoint(request_data: dict):
+    """Stores multiple events in batch."""
+    from .tools import memory_store_batch
+    return await memory_store_batch(
+        request_data.get("items", []),
+        source=request_data.get("source", "user_input"),
+    )
+
+
 @app.post("/memory/query")
 async def memory_query_endpoint(request_data: dict):
     """Routes a natural language query through the full pipeline: classify → plan → retrieve."""
@@ -157,14 +167,14 @@ async def event_log_search_endpoint(
 
 @app.get("/kg/query")
 async def kg_query_endpoint(
-    subject: Optional[str] = Query(None, description="Subject to query"),
+    subject: Optional[str] = Query(None, description="Subject to query (in.name)"),
+    object: Optional[str] = Query(None, description="Object to query (out.name)"),
     predicate: Optional[str] = Query(None, description="Predicate to query"),
     at_time: Optional[str] = Query(None, description="Time to query at")
 ):
-    """Direct graph traversal: query facts by subject/predicate/time."""
-    # Import the tool function directly to reuse the logic
+    """Direct graph traversal: query facts by subject/object/predicate/time."""
     from .tools import kg_query
-    return await kg_query(subject, predicate, at_time)
+    return await kg_query(subject, object, predicate, at_time)
 
 
 @app.get("/semantic/search")
