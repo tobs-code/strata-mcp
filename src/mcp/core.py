@@ -25,6 +25,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 
 from mcp.server.fastmcp import FastMCP
 from src.router.cost_awareness import CostTracker
+from src.router.policy import BudgetTracker
 
 # Shared CostTracker – wird von RoutingPolicy automatisch gefüttert
 cost_tracker = CostTracker()
@@ -117,8 +118,6 @@ def _jittered_backoff(level: int) -> float:
 
 def _budget_aware_should_retry(sql: str) -> bool:
     """Adaptive retry logic based on query complexity and system health."""
-    from src.router.policy import BudgetTracker
-
     health = BudgetTracker._health_factor
 
     # Heavy queries get fewer retries
@@ -234,8 +233,6 @@ async def _query_surreal(sql: str, params: Optional[Dict[str, Any]] = None) -> A
                 _surreal_circuit_open = False
                 _surreal_backoff_level = 0
                 # Success: reset health factor
-                from src.router.policy import BudgetTracker
-
                 BudgetTracker.update_system_health(1.0)
             return data
         except Exception as exc:
@@ -247,8 +244,6 @@ async def _query_surreal(sql: str, params: Optional[Dict[str, Any]] = None) -> A
                 _surreal_backoff_level = min(level + 1, 10)
 
                 # Update health factor based on failure count
-                from src.router.policy import BudgetTracker
-
                 health = 1.0 - (min(_surreal_failure_count, 10) / 12.0)
                 BudgetTracker.update_system_health(health)
 
@@ -384,13 +379,9 @@ async def _background_reconnect_task():
                         _surreal_circuit_open = False
                         _surreal_backoff_level = 0
                         # Reset health factor to healthy
-                        from src.router.policy import BudgetTracker
-
                         BudgetTracker.update_system_health(1.0)
                 else:
                     # Still failing, update health factor based on failure count
-                    from src.router.policy import BudgetTracker
-
                     async with _surreal_lock:
                         health = 1.0 - (min(_surreal_failure_count, 10) / 12.0)
                         BudgetTracker.update_system_health(health)

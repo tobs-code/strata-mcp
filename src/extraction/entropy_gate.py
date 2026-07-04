@@ -722,8 +722,6 @@ class EntropyGate:
         "tasks",
         "project",
         "projects",
-        "security",
-        "governance",
         "guardrails",
         "compliance",
         "bottleneck",
@@ -857,6 +855,7 @@ class EntropyGate:
         """
         # First, try SVO extraction if spaCy is available
         entity_type_map = {}
+        svo_triples = None
         try:
             from src.extraction.entity_utils import extract_entities, extract_triples
 
@@ -913,13 +912,16 @@ class EntropyGate:
                         f"  [KG] Entity: {name} ({entity_type_map.get(name, '?')}) -> {eid}"
                     )
 
-        # Process SVO triples if spaCy is available
-        try:
-            from src.extraction.entity_utils import extract_triples
+        # Process SVO triples if spaCy is available (using cached svo_triples from above)
+        if svo_triples is None:
+            try:
+                from src.extraction.entity_utils import extract_triples
+                svo_triples = extract_triples(text)
+            except ImportError:
+                svo_triples = []
 
-            svo_triples = extract_triples(text)
-
-            # Create facts from SVO triples
+        # Create facts from SVO triples
+        if svo_triples:
             for triple in svo_triples:
                 subject = triple["subject"]
                 predicate = triple["predicate"]
@@ -943,9 +945,10 @@ class EntropyGate:
                 ):
                     try:
                         source_event_escaped = self._escape_surrealql(event_id)
+                        predicate_escaped = self._escape_surrealql(predicate)
                         relate_sql = f"""
                         RELATE {entity_ids[subject_idx]}->fact->{entity_ids[obj_idx]}
-                        SET predicate = '{predicate}',
+                        SET predicate = '{predicate_escaped}',
                             source_event = <record>`{source_event_escaped}`,
                             confidence = {confidence:.4f};
                         """
@@ -959,9 +962,6 @@ class EntropyGate:
                     except Exception as e:
                         if debug:
                             print(f"  [KG] Error creating SVO fact: {e}")
-        except ImportError:
-            # If spaCy is not available, continue with original co-occurrence method
-            pass
 
         # Fall back to co-occurrence method for any remaining entity pairs
         # Uses sentence-level proximity (nicht global O(n²)) + hard cap + Distanz-Confidence

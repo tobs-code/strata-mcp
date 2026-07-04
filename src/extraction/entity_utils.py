@@ -14,6 +14,9 @@ from src.extraction.embedding_service import BaseEmbeddingService, get_embedding
 # Global variable for spaCy model (lazy-loaded)
 _nlp = None
 
+# Cache for embedding calculations
+_EMBEDDING_CACHE = {}
+
 
 def _get_nlp():
     """Lazy-load spaCy model with fallback to regex if not available."""
@@ -536,10 +539,6 @@ def extract_entities_with_groq(text: str) -> list[dict]:
 
 def extract_entities(text: str) -> list[dict]:
     method = os.getenv("EXTRACTION_METHOD", "auto")
-    if method == "groq":
-        entities = extract_entities_with_groq(text)
-        if entities:
-            return entities
     if method in ("groq", "auto"):
         entities = extract_entities_with_groq(text)
         if entities:
@@ -999,10 +998,6 @@ def extract_triples_with_groq(text: str) -> list[dict]:
 
 def extract_triples(text: str) -> list[dict]:
     method = os.getenv("EXTRACTION_METHOD", "auto")
-    if method == "groq":
-        triples = extract_triples_with_groq(text)
-        if triples:
-            return triples
     if method in ("groq", "auto"):
         triples = extract_triples_with_groq(text)
         if triples:
@@ -1010,5 +1005,3 @@ def extract_triples(text: str) -> list[dict]:
     return extract_triples_with_spacy(text)
 
 
-# Cache for embedding calculations
-_EMBEDDING_CACHE = {}

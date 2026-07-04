@@ -128,6 +128,6 @@ if __name__ == "__main__":
     test_text = "This is a test sentence for embedding."
     embedding = service.embed_for_storage(test_text)
 
-    print(f"Embedding dimension: {len(emb1)}")
-    print(f"First 5 values: {emb1[:5]}")
+    print(f"Embedding dimension: {len(embedding)}")
+    print(f"First 5 values: {embedding[:5]}")
     print(f"Sample embedding for: '{test_text}'")

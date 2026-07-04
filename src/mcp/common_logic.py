@@ -67,9 +67,11 @@ async def _execute_query(query: str, cost_budget: str = "auto") -> dict:
     q_type_str, confidence = classifier.classify(query)
     
     # Convert string query type to enum
+    # Classifier returns "multi-hop" but QueryType expects "multi_hop"
     try:
         if isinstance(q_type_str, str):
-            q_type = QueryType(q_type_str)
+            q_type_normalized = q_type_str.replace("-", "_")
+            q_type = QueryType(q_type_normalized)
         else:
             q_type = q_type_str
     except ValueError:

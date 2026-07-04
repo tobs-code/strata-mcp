@@ -10,7 +10,9 @@ Measures the 5 key metrics from the paper:
 
 import json
 import os
+import sys
 import time
+from datetime import datetime
 from typing import Any, Dict, List
 
 import numpy as np
@@ -27,7 +29,7 @@ from src.router.cost_awareness import CostTracker
 from src.router.policy import RoutingPolicy
 
 
-class sieveonEvalHarness:
+class SieveonEvalHarness:
     def __init__(self):
         # Database configuration from environment variables
         self.surreal_url = os.getenv("SURREALDB_URL", "http://127.0.0.1:8000/sql")
@@ -81,17 +83,17 @@ class sieveonEvalHarness:
 
         if strategy_name == "event_log_first":
             sql = f"SELECT * FROM event WHERE content @@ '{escape_surrealql(query)}' ORDER BY timestamp DESC LIMIT 5;"
-            result = self.query_surreal(sql)
+            result = self._query_surreal(sql)
             num_queries = 1
         elif strategy_name == "knowledge_graph_first":
             sql = f"SELECT * FROM entity WHERE name @@ '{escape_surrealql(query)}';"
-            result = self.query_surreal(sql)
+            result = self._query_surreal(sql)
             num_queries = 1
         else:
             # Hybrid fallback
             sql1 = f"SELECT * FROM event WHERE content @@ '{escape_surrealql(query)}' LIMIT 3;"
             sql2 = f"SELECT * FROM entity WHERE name @@ '{escape_surrealql(query)}' LIMIT 3;"
-            result = [self.query_surreal(sql1), self.query_surreal(sql2)]
+            result = [self._query_surreal(sql1), self._query_surreal(sql2)]
             num_queries = 2
 
         latency = time.time() - start
@@ -142,7 +144,6 @@ class sieveonEvalHarness:
         results["overall_score"] = np.mean(scores) if scores else 0.0
 
         return results
-        return results
 
     def print_summary(self, results):
         print("\n" + "=" * 50)
@@ -161,8 +162,8 @@ class sieveonEvalHarness:
 
 
 if __name__ == "__main__":
-    harness = sieveonEvalHarness()
-    results = harness.run_all_evals()
+    harness = SieveonEvalHarness()
+    results = harness.evaluate()
 
     # The summary is already printed in run_all_evals
     # Save results to file
