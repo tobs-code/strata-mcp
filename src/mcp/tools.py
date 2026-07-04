@@ -61,9 +61,9 @@ async def memory_store_batch(
 
 
 @mcp.tool()
-async def memory_query(query: str, cost_budget: str = "auto") -> dict:
+async def memory_query(query: str, cost_budget: str = "auto", limit: int = 10) -> dict:
     """Routes a natural language query through the full pipeline: classify → plan → retrieve."""
-    return await _execute_query(query, cost_budget)
+    return await _execute_query(query, cost_budget, limit)
 
 
 @mcp.tool()
@@ -302,6 +302,8 @@ async def kg_query(
     object: Optional[str] = None,
     predicate: Optional[str] = None,
     at_time: Optional[str] = None,
+    limit: int = 100,
+    offset: int = 0,
 ) -> dict:
     """Direct graph traversal: query facts by subject/object/predicate/time.
     Returns associated entities with their inferred types (e.g., 'organization', 'concept').
@@ -362,7 +364,7 @@ async def kg_query(
     FROM fact
     {valid_filter} {extra_clauses_stripped}
     ORDER BY confidence DESC
-    LIMIT 100;
+    LIMIT {limit} START {offset};
     """
 
     result = await _query_surreal(sql)
@@ -413,6 +415,8 @@ async def kg_query(
             "object": object,
             "predicate": predicate,
             "at_time": at_time,
+            "limit": limit,
+            "offset": offset,
         },
     }
 

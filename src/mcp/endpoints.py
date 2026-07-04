@@ -134,6 +134,7 @@ async def memory_query_endpoint(request_data: dict):
     return await _execute_query(
         request_data.get("query", ""),
         request_data.get("cost_budget", "auto"),
+        request_data.get("limit", 10),
     )
 
 
@@ -170,11 +171,13 @@ async def kg_query_endpoint(
     subject: Optional[str] = Query(None, description="Subject to query (in.name)"),
     object: Optional[str] = Query(None, description="Object to query (out.name)"),
     predicate: Optional[str] = Query(None, description="Predicate to query"),
-    at_time: Optional[str] = Query(None, description="Time to query at")
+    at_time: Optional[str] = Query(None, description="Time to query at"),
+    limit: int = Query(100, description="Result limit (max facts to return)"),
+    offset: int = Query(0, description="Pagination offset"),
 ):
     """Direct graph traversal: query facts by subject/object/predicate/time."""
     from .tools import kg_query
-    return await kg_query(subject, object, predicate, at_time)
+    return await kg_query(subject, object, predicate, at_time, limit=limit, offset=offset)
 
 
 @app.get("/semantic/search")

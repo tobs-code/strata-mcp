@@ -82,7 +82,7 @@ async def _store_content(content: str, source: str = "user_input", debug: bool =
             "gate": gate_info}
 
 
-async def _execute_query(query: str, cost_budget: str = "auto") -> dict:
+async def _execute_query(query: str, cost_budget: str = "auto", limit: int = 10) -> dict:
     """Einzige Query-Implementierung: classify → route → execute → parse → track."""
     classifier = QueryClassifier()
     q_type_str, confidence = classifier.classify(query)
@@ -144,6 +144,11 @@ async def _execute_query(query: str, cost_budget: str = "auto") -> dict:
     entities, facts, events = _categorize_results(results)
 
     summary = _synthesize_answer(query, entities, facts, events)
+
+    # Apply limit to each result category
+    entities = entities[:limit]
+    facts = facts[:limit]
+    events = events[:limit]
 
     return {
         "query": query,
