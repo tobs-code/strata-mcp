@@ -78,7 +78,7 @@ class EntropyGateConfig:
         min_length: int = 10,  # Unter X Zeichen immer skippen
         min_diversity: float = 0.15,  # Anteil unique chars; repetitive Texte darunter skippen
         max_length: int = 1000,  # Über X Zeichen immer skippen
-        min_novelty: float = 0.08,  # Mindest-Novelty (1 - avg_sim); darunter = near-dup → skip
+        min_novelty: float = 0.20,  # Mindest-Novelty (1 - avg_sim); darunter = near-dup → skip
         max_entities_for_cooccurrence: int = 6,  # Obergrenze gegen kombinatorische Explosion
     ):
         self.alpha = alpha
@@ -154,11 +154,15 @@ class EntropyGate:
 
     @staticmethod
     def _extract_ok(data: List[Dict], index: int = 1) -> bool:
-        """Safely check if a SurrealDB statement returned status OK."""
-        if not isinstance(data, list) or len(data) <= index:
+        """Safely check if a SurrealDB statement returned status OK.
+        Scans all entries starting from index to find first OK result."""
+        if not isinstance(data, list):
             return False
-        item = data[index]
-        return isinstance(item, dict) and item.get("status") == "OK"
+        for i in range(index, len(data)):
+            item = data[i]
+            if isinstance(item, dict) and item.get("status") == "OK":
+                return True
+        return False
 
     def _hash_content(self, text: str) -> str:
         return hashlib.sha256(text.encode("utf-8")).hexdigest()
@@ -187,12 +191,12 @@ class EntropyGate:
             entropy -= p * math.log2(p)
         return entropy
 
-    def calculate_novelty(self, text: str, content_hash: Optional[str] = None) -> float:
+    def calculate_novelty(self, text: str, exclude_id: Optional[str] = None) -> float:
         """
         Novelty based on embedding similarity against existing content in SurrealDB.
         Returns value between 0 (no novelty) and 1 (maximum novelty).
         Uses SurrealDB's native vector functions.
-        content_hash: if provided, excludes the event with this hash (prevents self-match).
+        exclude_id: if provided, excludes the event with this id (prevents self-match).
         """
         if not text.strip():
             return 0.0
@@ -204,8 +208,8 @@ class EntropyGate:
         # Search for top-k similar vectors in SurrealDB
         # We use cosine similarity and calculate 1.0 - avg_similarity for novelty
         exclude_self = ""
-        if content_hash:
-            exclude_self = f"\n  AND content_hash != '{content_hash}'"
+        if exclude_id:
+            exclude_self = f"\n  AND id != '{exclude_id}'"
         sql = f"""
         SELECT vector::similarity::cosine(embedding, {emb_str}) AS similarity
         FROM event
@@ -268,11 +272,11 @@ class EntropyGate:
         return len(set(words)) / len(words)
 
     def should_extract(
-        self, text: str, content_hash: Optional[str] = None
+        self, text: str, exclude_id: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         Entscheidet basierend auf Composite-Score ob Text in KG extrahiert werden soll
-        content_hash: wird an calculate_novelty weitergereicht, um Self-Match zu verhindern
+        exclude_id: event_id, die von der Novelty-Berechnung ausgeschlossen wird (Self-Match)
         """
         if len(text) < self.config.min_length:
             result = {
@@ -350,7 +354,7 @@ class EntropyGate:
 
         # Calculate individual scores
         text_entropy = self.calculate_char_entropy(text)
-        novelty = self.calculate_novelty(text, content_hash=content_hash)
+        novelty = self.calculate_novelty(text, exclude_id=exclude_id)
 
         # Near-duplicate guard: skip if embedding is too similar to existing content
         if novelty < self.config.min_novelty:
@@ -558,7 +562,8 @@ class EntropyGate:
     def _ensure_entity(
         self, name: str, preferred_type: Optional[str] = None
     ) -> Optional[str]:
-        """Create an entity if it does not exist. Returns the entity ID."""
+        """Create an entity if it does not exist. Returns the entity ID.
+        Concurrency-safe: retries SELECT if CREATE races with another writer."""
         name_escaped = self._escape_surrealql(name)
         entity_type = preferred_type or infer_entity_type(name, self.embedding_service)
 
@@ -607,6 +612,13 @@ class EntropyGate:
         entity_result = self._extract_result(result)
         if entity_result and len(entity_result) > 0:
             return entity_result[0].get("id")
+
+        # Retry SELECT (handles race condition: another writer created it between our SELECT and CREATE)
+        retry_result = self._query_surreal(check_sql)
+        retry_existing = self._extract_result(retry_result)
+        if retry_existing and len(retry_existing) > 0:
+            return retry_existing[0].get("id")
+
         return None
 
     def _find_similar_entity(self, name: str, threshold: float = 0.85) -> Optional[str]:
@@ -974,12 +986,11 @@ class EntropyGate:
                     and confidence >= 0.4
                 ):
                     try:
-                        source_event_escaped = self._escape_surrealql(event_id)
                         predicate_escaped = self._escape_surrealql(predicate)
                         relate_sql = f"""
                         RELATE {entity_ids[subject_idx]}->fact->{entity_ids[obj_idx]}
                         SET predicate = '{predicate_escaped}',
-                            source_event = <record>`{source_event_escaped}`,
+                            source_event = {event_id},
                             confidence = {confidence:.4f};
                         """
                         relate_result = self._query_surreal(relate_sql)
@@ -1089,11 +1100,10 @@ class EntropyGate:
                                 )
 
                                 if confidence >= 0.55:
-                                    source_event_escaped = self._escape_surrealql(event_id)
                                     relate_sql = f"""
                                     RELATE {subset_ids[idx_a]}->fact->{subset_ids[idx_b]}
                                     SET predicate = '{predicate}',
-                                        source_event = <record>`{source_event_escaped}`,
+                                        source_event = {event_id},
                                         confidence = {confidence:.4f};
                                     """
                                     relate_result = self._query_surreal(relate_sql)
@@ -1111,9 +1121,8 @@ class EntropyGate:
 
         for eid in entity_ids:
             try:
-                event_escaped = self._escape_surrealql(event_id)
                 relate_sql = f"""
-                RELATE <record>`{event_escaped}`->fact->{eid}
+                RELATE {event_id}->fact->{eid}
                 SET predicate = 'mentions',
                     confidence = 0.8;
                 """
@@ -1121,8 +1130,7 @@ class EntropyGate:
                 if self._extract_ok(relate_result):
                     facts_created += 1
             except Exception as e:
-                if debug:
-                    print(f"  [KG] Error creating mention fact: {e}")
+                sys.stderr.write(f"[EntropyGate] Error creating mention fact for {event_id} -> {eid}: {e}\n")
 
         return {"entities_created": entities_created, "facts_created": facts_created}
 
@@ -1168,7 +1176,7 @@ class EntropyGate:
         source: str = "unknown",
         debug: bool = False,
         metadata: Optional[Dict[str, Any]] = None,
-    ) -> Optional[str]:
+    ) -> tuple[Optional[str], Optional[Dict[str, Any]]]:
         """
         Hauptfunktion: Ingest eines Textes in das Memory System
         1. IMMER in Raw Event Log speichern
@@ -1177,16 +1185,14 @@ class EntropyGate:
         """
 
         if not text or not text.strip():
-            print(f"Error: Empty or whitespace-only content rejected (source={source})")
-            return None
+            sys.stderr.write(f"[EntropyGate] Error: Empty or whitespace-only content rejected (source={source})\n")
+            return None, None
         if len(text) > 100_000:
-            print(
-                f"Error: Content exceeds maximum storage length ({len(text)} > 100000) (source={source})"
-            )
-            return None
+            sys.stderr.write(f"[EntropyGate] Error: Content exceeds maximum storage length ({len(text)} > 100000) (source={source})\n")
+            return None, None
         if "\x00" in text:
-            print(f"Error: Content contains null bytes, rejecting (source={source})")
-            return None
+            sys.stderr.write(f"[EntropyGate] Error: Content contains null bytes, rejecting (source={source})\n")
+            return None, None
 
         # 0. Dedup: Prüfen ob exakt gleicher Content mit gleicher Source bereits existiert
         content_hash = self._hash_content(text)
@@ -1206,10 +1212,11 @@ class EntropyGate:
                 print(
                     f"  [Dedup] Found existing event {event_id} for identical content and source"
                 )
-            gate_result = self.should_extract(text, content_hash=content_hash)
+            kg_result = None
+            gate_result = self.should_extract(text, exclude_id=event_id)
             if gate_result["decision"] == "extract" and event_id:
                 kg_result = self._extract_to_kg(text, event_id, debug)
-            return event_id
+            return event_id, kg_result
 
         # 1. IMMER in Raw Event Log speichern (ohne Gate!)
         embedding = self.embedding_service.embed_for_storage(text)
@@ -1251,16 +1258,17 @@ class EntropyGate:
                 f"[EntropyGate]   source={source}, content_length={len(text)}, hash={content_hash[:16]}...\n"
             )
 
-        # 2. Entropy Gate prüfen (mit content_hash, um Self-Match zu vermeiden)
-        gate_result = self.should_extract(text, content_hash=content_hash)
+        # 2. Entropy Gate prüfen (mit event_id als exclude_id, um Self-Match zu vermeiden)
+        gate_result = self.should_extract(text, exclude_id=event_id)
 
         if debug:
             print(f"Entropy Gate Decision: {gate_result}")
 
         # 3. Falls extract: starte KG-Extraction
+        kg_result = None
         if gate_result["decision"] == "extract" and event_id:
             kg_result = self._extract_to_kg(text, event_id, debug)
             if debug:
                 print(f"  [KG] Extraction complete: {kg_result}")
 
-        return event_id
+        return event_id, kg_result

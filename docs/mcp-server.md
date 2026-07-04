@@ -161,13 +161,35 @@ Stores an event in the immutable Raw Event Log. The Entropy Gate later decides w
 
 **Returns:**
 
+The `gate` object shows the Entropy Gate decision:
+
+- `"decision": "extract"` → extracted into KG (includes `kg: {entities_created, facts_created}`)
+- `"decision": "skip"` → rejected by guardrail (`"reason"`: `"text_too_short"`, `"text_too_long"`, `"too_repetitive"`, or `"near_duplicate"`)
+- `"decision": "ignore"` → passed guardrails but composite score below threshold (`"composite_score"`, `"threshold"`)
+
 ```json
 {
   "event_id": "event:abc123…",
   "status": "stored",
   "source": "user_input",
   "gate": {
-    "decision": "extract"
+    "decision": "extract",
+    "kg": {"entities_created": 3, "facts_created": 5}
+  }
+}
+```
+
+When skipped or ignored:
+```json
+{
+  "event_id": "event:abc123…",
+  "status": "stored",
+  "source": "user_input",
+  "gate": {
+    "decision": "skip",
+    "reason": "too_repetitive",
+    "composite_score": null,
+    "threshold": 0.3
   }
 }
 ```
@@ -181,7 +203,7 @@ Stores an event in the immutable Raw Event Log. The Entropy Gate later decides w
 }
 ```
 
-The embedding is automatically generated via `sentence-transformers/all-MiniLM-L6-v2` (384 dimensions) and stored as `vector(f32, 384)` in SurrealDB.
+The embedding is automatically generated via `nomic-ai/nomic-embed-text-v1.5` (768 dimensions) and stored as `vector(f32, 768)` in SurrealDB.
 
 ---
 
@@ -198,10 +220,29 @@ Stores multiple events in batch. Each item goes through the Entropy Gate indepen
 
 ```json
 {
-  "results": [{"index": 0, "event_id": "...", "gate": {...}}, ...],
-  "errors": [{"index": 1, "error": "..."}],
-  "stored": 1,
-  "failed": 1
+  "results": [
+    {
+      "index": 0,
+      "event_id": "event:...",
+      "status": "stored",
+      "source": "user_input",
+      "gate_decision": "extract",
+      "entities_created": 3,
+      "facts_created": 5
+    },
+    {
+      "index": 1,
+      "event_id": "event:...",
+      "status": "stored",
+      "source": "user_input",
+      "gate_decision": "skip",
+      "gate_reason": "text_too_short"
+    }
+  ],
+  "errors": [],
+  "stored": 2,
+  "failed": 0,
+  "gate_summary": {"extract": 1, "ignore": 0, "skip": 1}
 }
 ```
 

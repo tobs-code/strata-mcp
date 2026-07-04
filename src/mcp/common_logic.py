@@ -53,7 +53,7 @@ async def _store_content(content: str, source: str = "user_input", debug: bool =
 
     gate = _get_entropy_gate()
     gate_result = await asyncio.to_thread(gate.should_extract, content)
-    event_id = await asyncio.to_thread(gate.ingest, content, source, debug=False, metadata=metadata)
+    event_id, kg_result = await asyncio.to_thread(gate.ingest, content, source, debug=False, metadata=metadata)
 
     if event_id is None:
         return {"event_id": None, "status": "error", "source": source,
@@ -67,16 +67,10 @@ async def _store_content(content: str, source: str = "user_input", debug: bool =
         gate_info["composite_score"] = gate_result.get("composite_score")
         gate_info["threshold"] = gate_result.get("threshold")
 
-    # KG-Extraktion wenn das Gate zustimmt
-    if gate_result.get("decision") == "extract" and event_id:
-        try:
-            kg_result = await asyncio.to_thread(gate._extract_to_kg, content, event_id, debug)
-            gate_info["kg"] = {"entities_created": kg_result.get("entities_created", 0),
-                                "facts_created": kg_result.get("facts_created", 0)}
-        except Exception as e:
-            if debug:
-                print(f"  [KG] Extraction error: {e}")
-            gate_info["kg"] = {"error": str(e)}
+    # KG-Resultate aus ingest() verwenden (kein zweiter _extract_to_kg-Aufruf!)
+    if kg_result:
+        gate_info["kg"] = {"entities_created": kg_result.get("entities_created", 0),
+                            "facts_created": kg_result.get("facts_created", 0)}
 
     return {"event_id": event_id, "status": "stored", "source": source,
             "gate": gate_info}

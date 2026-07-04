@@ -160,6 +160,12 @@ def _register_builtin(engine: MigrationEngine):
         apply_fn=_m001_baseline,
     ))
 
+    engine.register(Migration(
+        version=2,
+        description="Add UNIQUE index on entity.name to prevent duplicate entities",
+        apply_fn=_m002_entity_name_unique,
+    ))
+
 
 async def _m001_baseline(query):
     sql = r"""
@@ -220,3 +226,52 @@ DEFINE INDEX IF NOT EXISTS gate_log_decision ON gate_log COLUMNS decision;
         stmt = stmt.strip()
         if stmt:
             await query(stmt + ";")
+
+
+async def _m002_entity_name_unique(query):
+    """Drop existing non-unique index and recreate as UNIQUE.
+    Before applying, merges any duplicate entities by keeping the oldest and
+    re-linking all facts to it, then removing the newer duplicates."""
+
+    # 1. Find duplicate entity names (simple GROUP BY)
+    dup_sql = "SELECT name, count() AS cnt FROM entity GROUP BY name;"
+    raw = await query(dup_sql)
+    if raw:
+        for entry in raw:
+            if not isinstance(entry, dict):
+                continue
+            result = entry.get("result", [])
+            if not isinstance(result, list):
+                continue
+            for row in result:
+                cnt = row.get("cnt", 0)
+                if not isinstance(cnt, int) or cnt < 2:
+                    continue
+                name = row.get("name", "")
+                if not name:
+                    continue
+                name_escaped = name.replace("'", "''")
+                list_sql = f"SELECT id, created_at FROM entity WHERE name = '{name_escaped}' ORDER BY created_at ASC;"
+                raw_ids = await query(list_sql)
+                ids = []
+                if isinstance(raw_ids, list):
+                    for e in raw_ids:
+                        if isinstance(e, dict):
+                            r = e.get("result", [])
+                            if isinstance(r, list):
+                                for item in r:
+                                    if isinstance(item, dict) and "id" in item:
+                                        ids.append(item["id"])
+                if len(ids) < 2:
+                    continue
+                keep_id = ids[0]
+                for remove_id in ids[1:]:
+                    await query(f"UPDATE fact SET in = {keep_id} WHERE in = {remove_id};")
+                    await query(f"UPDATE fact SET out = {keep_id} WHERE out = {remove_id};")
+                    await query(f"DELETE {remove_id};")
+
+    # 2. Drop old non-unique index
+    await query("REMOVE INDEX entity_name ON entity;")
+
+    # 3. Create UNIQUE index
+    await query("DEFINE INDEX IF NOT EXISTS entity_name ON entity COLUMNS name UNIQUE;")

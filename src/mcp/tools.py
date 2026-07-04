@@ -40,6 +40,7 @@ async def memory_store_batch(
     """Stores multiple events in batch. Each item must have 'content'. Optional: 'source', 'metadata'."""
     results = []
     errors = []
+    gate_counts = {"extract": 0, "ignore": 0, "skip": 0}
     for i, item in enumerate(items):
         try:
             content = item.get("content", "")
@@ -49,7 +50,24 @@ async def memory_store_batch(
             item_source = item.get("source", source)
             item_metadata = item.get("metadata")
             result = await _store_content(content, item_source, debug=False, metadata=item_metadata)
-            results.append({"index": i, **result})
+            gate_decision = result.get("gate", {}).get("decision", "unknown")
+            gate_counts[gate_decision] = gate_counts.get(gate_decision, 0) + 1
+            flat_result = {
+                "index": i,
+                "event_id": result.get("event_id"),
+                "status": result.get("status", "unknown"),
+                "source": result.get("source", item_source),
+                "gate_decision": gate_decision,
+            }
+            gate_info = result.get("gate", {})
+            if gate_decision == "extract":
+                flat_result["entities_created"] = gate_info.get("kg", {}).get("entities_created", 0)
+                flat_result["facts_created"] = gate_info.get("kg", {}).get("facts_created", 0)
+            else:
+                flat_result["gate_reason"] = gate_info.get("reason")
+                flat_result["composite_score"] = gate_info.get("composite_score")
+                flat_result["threshold"] = gate_info.get("threshold")
+            results.append(flat_result)
         except Exception as e:
             errors.append({"index": i, "error": str(e)})
     return {
@@ -57,6 +75,7 @@ async def memory_store_batch(
         "errors": errors,
         "stored": len(results),
         "failed": len(errors),
+        "gate_summary": gate_counts,
     }
 
 
@@ -560,7 +579,7 @@ async def semantic_search(query: str, top_k: int = 5) -> dict:
                 kg_result = await _query_surreal(kg_sql)
                 kg_facts_raw = _extract_result(kg_result, 1) or []
                 if kg_facts_raw:
-                    NOISY_PREDICATES = {"weakly_related", "mentions"}
+                    NOISY_PREDICATES = {"weakly_related"}
                     MIN_CONFIDENCE = 0.5
                     filtered = []
                     for f in kg_facts_raw:

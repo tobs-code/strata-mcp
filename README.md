@@ -19,7 +19,7 @@ Sieveon is an agent memory system that intelligently classifies, routes, plans, 
 ```
                   ┌─────────────────────────┐
                   │  MCP Server             │  (Python, stdio)
-                  │  15 tools + 3 resources │
+                  │  16 tools + 3 resources │
                   └──────┬──────────────────┘
                          │
                          ▼
@@ -132,11 +132,13 @@ composite = alpha * normalized_text_entropy + beta * embedding_novelty
 ```
 
 - **Text entropy** = Shannon entropy on character level (alphanumeric + whitespace), normalized to `[0, 1]` using a max of ~4.5 bits.
-- **Embedding novelty** = `1 − avg cosine similarity` to the top-5 most similar previously stored embeddings (in-memory index for the current session).
+- **Embedding novelty** = `1 − avg cosine similarity` to the top-5 most similar previously stored embeddings (queried via SurrealDB native vector search).
 - **Weights** (default): `alpha = 0.35`, `beta = 0.65`.
 - **Threshold** (adaptive): starts at `0.30` (cold start) and ramps linearly to `0.55` after ~150 events.
 
 **Decision:** `extract` if `composite >= threshold`, otherwise `ignore`.
+
+**Near-duplicate guardrail:** If embedding novelty (1 − avg similarity to top-5 existing) falls below `min_novelty = 0.20`, the content is skipped as a near-duplicate. Uses SurrealDB native vector search with event_id exclusion to prevent self-matches.
 
 **Diversity guardrails (pre-filter):** Short texts (≤150 chars) are checked for `character_diversity < 0.15`; longer texts use `word_diversity < 0.20`. This blocks noise ("aaaa...", "test test...") while allowing normal English text of any length to pass through to the composite score.
 
