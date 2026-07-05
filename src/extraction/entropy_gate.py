@@ -1259,7 +1259,11 @@ class EntropyGate:
             )
 
         # 2. Entropy Gate prüfen (mit event_id als exclude_id, um Self-Match zu vermeiden)
-        gate_result = self.should_extract(text, exclude_id=event_id)
+        try:
+            gate_result = self.should_extract(text, exclude_id=event_id)
+        except Exception as e:
+            sys.stderr.write(f"[EntropyGate] Gate decision error: {e}\n")
+            gate_result = {"decision": "ignore", "reason": f"gate_error: {e}"}
 
         if debug:
             print(f"Entropy Gate Decision: {gate_result}")
@@ -1267,7 +1271,12 @@ class EntropyGate:
         # 3. Falls extract: starte KG-Extraction
         kg_result = None
         if gate_result["decision"] == "extract" and event_id:
-            kg_result = self._extract_to_kg(text, event_id, debug)
+            try:
+                kg_result = self._extract_to_kg(text, event_id, debug)
+            except Exception as e:
+                import sys
+                sys.stderr.write(f"[EntropyGate] KG extraction error: {e}\n")
+                kg_result = {"entities_created": 0, "facts_created": 0, "error": str(e)}
             if debug:
                 print(f"  [KG] Extraction complete: {kg_result}")
 

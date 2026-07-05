@@ -676,7 +676,7 @@ def _is_highly_repetitive(text: str) -> bool:
 
 
 @mcp.tool()
-async def explain_routing(query: str) -> dict:
+async def memory_explain_routing(query: str) -> dict:
     """Explains why the router chose a specific strategy for a query."""
     from src.extraction.classifier import QueryClassifier
     from src.router.policy import RoutingPolicy

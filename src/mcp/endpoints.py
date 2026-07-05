@@ -203,8 +203,8 @@ async def memory_stats_endpoint(random_string: str = ""):
 async def explain_routing_endpoint(query: str = Query(..., description="Query to explain routing for")):
     """Explains why the router chose a specific strategy for a query."""
     # Import the tool function directly to reuse the logic
-    from .tools import explain_routing
-    return await explain_routing(query)
+    from .tools import memory_explain_routing
+    return await memory_explain_routing(query)
 
 
 @app.post("/memory/forget")

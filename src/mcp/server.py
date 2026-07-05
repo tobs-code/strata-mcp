@@ -41,7 +41,7 @@ from .tools import (
     kg_query,
     graph_traverse,
     semantic_search,
-    explain_routing,
+    memory_explain_routing,
     memory_forget,
     memory_unforget,
     memory_consolidate,
@@ -103,7 +103,7 @@ __all__ = [
     'kg_query',
     'graph_traverse',
     'semantic_search',
-    'explain_routing',
+    'memory_explain_routing',
     'memory_forget',
     'memory_consolidate'
 ]
