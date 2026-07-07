@@ -1,6 +1,6 @@
 # MCP Server — Sieveon Memory Stack
 
-The MCP Server exposes the entire Sieveon Memory Stack via the [Model Context Protocol (MCP)](https://modelcontextprotocol.io) — 17 memory tools and 3 MCP resources. Any MCP-compatible client (e.g. Claude Desktop, Cursor, VS Code with MCP extension) can call them directly, without hosting the stack itself.
+The MCP Server exposes the entire Sieveon Memory Stack via the [Model Context Protocol (MCP)](https://modelcontextprotocol.io) — 18 memory tools and 3 MCP resources. Any MCP-compatible client (e.g. Claude Desktop, Cursor, VS Code with MCP extension) can call them directly, without hosting the stack itself.
 
 ## Architecture Overview
 
@@ -12,7 +12,7 @@ The MCP Server exposes the entire Sieveon Memory Stack via the [Model Context Pr
 │                    MCP Server (FastMCP)                       │
 │  ┌─────────────┐ ┌─────────────┐ ┌─────────────┐ ┌──────────┐│
 │  │   Core      │ │ Primitives  │ │Introspection│ │  Maint.  ││
-│  │  (4 Tools)  │ │  (5 Tools)  │ │  (2 Tools)  │ │(4 Tools) ││
+│  │  (5 Tools)  │ │  (6 Tools)  │ │  (2 Tools)  │ │(4 Tools) ││
 │  │             │ │             │ │             │ │          ││
 │  │  Resources  │ │  Resources  │ │  Resources  │ │          ││
 │  │ (3: entity, │ │ (entity/{id}│ │  (stats)    │ │          ││
@@ -151,7 +151,7 @@ In `.cursor/mcp.json` or via the VS Code MCP extension:
 }
 ```
 
-## The 17 Tools (4 Layers) + MCP Resources
+## The 18 Tools (4 Layers) + MCP Resources
 
 ### Layer 1 — Core Memory Operations
 
@@ -388,7 +388,7 @@ Updates a fact in the Knowledge Graph through logical invalidation. The old fact
 
 ### Layer 2 — Retrieval Primitives
 
-Five tools for direct access to events, entities, and facts — bypasses the router.
+Seven tools for direct access to events, entities, and facts — bypasses the router.
 
 #### `event_log_search`
 
@@ -617,6 +617,70 @@ Pure vector search path without Knowledge Graph. Uses SurrealDB's `vector::simil
 
 ---
 
+#### `memory_get`
+
+Direct access to a single event, entity, or knowledge graph fact by its record ID or entity name.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `id` | `string` | yes | Record ID (`event:xxx`, `entity:xxx`, `fact:xxx`) or entity name |
+| `include_facts` | `bool` | no | For entities only — include active KG facts (default: `true`) |
+
+**Returns:**
+
+For events:
+```json
+{
+  "status": "ok",
+  "type": "event",
+  "data": {
+    "id": "event:abc123",
+    "content": "Alice works at Acme Corp",
+    "timestamp": "2026-07-07T17:57:05Z",
+    "source": "user_input",
+    "metadata": null,
+    "forgotten": false
+  }
+}
+```
+
+For entities (with `include_facts=true`):
+```json
+{
+  "status": "ok",
+  "type": "entity",
+  "data": {
+    "id": "entity:alice",
+    "name": "Alice",
+    "type": "person",
+    "facts": [
+      {"predicate": "works_at", "subject": "Alice", "object": "Acme Corp", "confidence": 0.9}
+    ]
+  }
+}
+```
+
+For facts:
+```json
+{
+  "status": "ok",
+  "type": "fact",
+  "data": {
+    "id": "fact:xyz",
+    "predicate": "works_at",
+    "subject": "Alice",
+    "object": "Acme Corp",
+    "confidence": 0.9,
+    "valid_from": "2026-07-04T18:27:05Z",
+    "valid_until": null
+  }
+}
+```
+
+**Name lookup:** passing a plain name (e.g. `"Alice"`) automatically resolves it as an entity name.
+
+---
+
 ### Layer 3 — Introspection Tools
 
 For debugging, meta-reasoning, and evaluation setup. These distinguish the stack from other systems.
@@ -651,7 +715,7 @@ Returns statistics about the current state of the Memory System.
 
 ---
 
-#### `explain_routing`
+#### `memory_explain_routing`
 
 Explains why the router chose a specific retrieval strategy for a query. Invaluable for evaluation setup and debugging.
 
@@ -836,6 +900,7 @@ read_resource("sieveon://entity/entity:alice")
 | `memory_store_markdown` | Core | `content` or `file_path`, `source?`, `chunk_size?`, `overlap?`, `include_heading_context?`, `chunking_method?`, `encoding_name?`, `strip_images?`, `parse_front_matter?`, `max_concurrent?`, `metadata?` | `status`, `source`, `total_chunks`, `stored`, `failed`, `results[]`, `errors[]`, `gate_summary` |
 | `memory_query` | Core | `query`, `cost_budget?`, `limit?` | `classified_as`, `strategy`, `results` |
 | `memory_update` | Core | `subject`, `predicate`, `new_value` | `invalidated_fact`, `new_fact` |
+| `memory_get` | Primitives | `id`, `include_facts?` | `status`, `type`, `data` |
 | `event_log_search` | Primitives | `query`, `since?`, `until?`, `limit?`, `offset?`, `include_forgotten?` | `events[]`, `count` |
 | `kg_query` | Primitives | `subject?`, `object?`, `predicate?`, `at_time?`, `limit?`, `offset?` | `facts[]`, `count`, `query_params` |
 | `graph_traverse` | Primitives | `start_entity`, `max_depth?`, `direction?`, `predicate?`, `min_confidence?` | `paths[]`, `nodes[]`, `edges[]`, `node_count`, `edge_count`, `path_count` |
@@ -843,7 +908,7 @@ read_resource("sieveon://entity/entity:alice")
 | `list_events` | Primitives | `limit?`, `offset?`, `since?`, `until?`, `source?`, `include_forgotten?` | `events[]`, `count`, `total` |
 | `semantic_search` | Primitives | `query`, `top_k?` | `events[]`, `count` |
 | `memory_stats` | Introspection | — | `event_count`, `entity_count`, `fact_count`, `gate_pass_rate`, … |
-| `explain_routing` | Introspection | `query` | `classified_as`, `strategy_selected`, `reason` |
+| `memory_explain_routing` | Introspection | `query` | `classified_as`, `strategy_selected`, `reason` |
 | `memory_forget` | Maintenance | `event_id?` or `entity?`, `reason?` | `forgotten_items[]`, `count`, `reason` |
 | `memory_unforget` | Maintenance | `event_id` | `status`, `event_id` |
 | `memory_consolidate` | Maintenance | `scope`, `entity?`, `delete_stale?` | `stale_facts_found`, `deleted_count`, `status` |
@@ -974,7 +1039,7 @@ The HNSW index `event_embedding_vec` is defined on the `embedding` field with `D
 
 | File | Purpose |
 |------|---------|
-| `src/mcp/server.py` | MCP server implementation (17 tools, 3 resources) |
+| `src/mcp/server.py` | MCP server implementation (18 tools, 3 resources) |
 | `docs/schema.surql` | SurrealDB schema (Event Log, KG, indexes) |
 | `docs/helper_functions.surql` | DB-side functions |
 | `docs/test_data.surql` | Sample test data |

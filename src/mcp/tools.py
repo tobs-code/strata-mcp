@@ -874,6 +874,122 @@ async def memory_explain_routing(query: str) -> dict:
 
 
 @mcp.tool()
+async def memory_get(
+    id: str,
+    include_facts: bool = True,
+) -> dict:
+    """Get a single memory item by its ID (event, entity, or fact).
+
+    Provides direct access to a specific event, entity, or knowledge graph fact.
+    - For events: returns content, timestamp, source, metadata, and related entities
+    - For entities: returns name, type, and optionally active KG facts
+    - For facts: returns subject, predicate, object, confidence, and validity
+    - For plain names: looks up as an entity name
+
+    Args:
+        id: The record ID (event:xxx, entity:xxx, fact:xxx) or entity name
+        include_facts: For entities only — include active KG facts (default True)
+    """
+    id_stripped = id.strip()
+
+    is_record_id = ":" in id_stripped and not id_stripped.startswith("⟨")
+
+    if is_record_id:
+        prefix = id_stripped.split(":")[0]
+
+        if prefix == "event":
+            sql = f"SELECT id, content, timestamp, source, metadata, forgotten, forgotten_reason, content_hash FROM {id_stripped};"
+            result = await _query_surreal(sql)
+            data = _extract_result(result, 1)
+            if not data:
+                return {"status": "error", "message": f"Event '{id_stripped}' not found"}
+            event = _clean_output(data[0])
+            return {"status": "ok", "type": "event", "data": event}
+
+        elif prefix == "entity":
+            sql = f"SELECT id, name, type, created_at, updated_at, forgotten, forget_reason FROM {id_stripped};"
+            result = await _query_surreal(sql)
+            data = _extract_result(result, 1)
+            if not data:
+                return {"status": "error", "message": f"Entity '{id_stripped}' not found"}
+            entity = _clean_output(data[0])
+
+            if include_facts:
+                facts_sql = f"""
+                SELECT id, predicate, in.name AS subject, in.id AS subject_id,
+                       out.name AS object, out.id AS object_id,
+                       confidence, valid_from, valid_until
+                FROM fact
+                WHERE (in = {id_stripped} OR out = {id_stripped})
+                  AND (valid_until IS NONE OR valid_until > time::now())
+                ORDER BY confidence DESC
+                LIMIT 100;
+                """
+                facts_result = await _query_surreal(facts_sql)
+                facts = _clean_output(_extract_result(facts_result, 1) or [])
+                entity["facts"] = facts
+
+            return {"status": "ok", "type": "entity", "data": entity}
+
+        elif prefix == "fact":
+            sql = f"""
+            SELECT id, predicate, in.name AS subject, in.id AS subject_id,
+                   in.type AS subject_type,
+                   out.name AS object, out.id AS object_id,
+                   out.type AS object_type,
+                   confidence, valid_from, valid_until, invalidated_reason
+            FROM {id_stripped};
+            """
+            result = await _query_surreal(sql)
+            data = _extract_result(result, 1)
+            if not data:
+                return {"status": "error", "message": f"Fact '{id_stripped}' not found"}
+            return {"status": "ok", "type": "fact", "data": _clean_output(data[0])}
+
+        else:
+            return {
+                "status": "error",
+                "message": f"Unknown ID prefix '{prefix}'. Expected 'event:', 'entity:', or 'fact:'.",
+            }
+
+    else:
+        name_escaped = escape_surrealql(id_stripped)
+        sql = f"""
+        SELECT id, name, type, created_at, updated_at, forgotten, forget_reason
+        FROM entity
+        WHERE name = '{name_escaped}'
+          AND forgotten = false
+        LIMIT 1;
+        """
+        result = await _query_surreal(sql)
+        data = _extract_result(result, 1)
+        if not data:
+            return {
+                "status": "error",
+                "message": f"No entity found with name or ID '{id_stripped}'",
+            }
+        entity = _clean_output(data[0])
+
+        if include_facts:
+            eid = entity["id"]
+            facts_sql = f"""
+            SELECT id, predicate, in.name AS subject, in.id AS subject_id,
+                   out.name AS object, out.id AS object_id,
+                   confidence, valid_from, valid_until
+            FROM fact
+            WHERE (in = {eid} OR out = {eid})
+              AND (valid_until IS NONE OR valid_until > time::now())
+            ORDER BY confidence DESC
+            LIMIT 100;
+            """
+            facts_result = await _query_surreal(facts_sql)
+            facts = _clean_output(_extract_result(facts_result, 1) or [])
+            entity["facts"] = facts
+
+        return {"status": "ok", "type": "entity", "data": entity}
+
+
+@mcp.tool()
 async def memory_forget(
     entity: Optional[str] = None, event_id: Optional[str] = None, reason: str = ""
 ) -> dict:
