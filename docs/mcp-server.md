@@ -1,6 +1,6 @@
 # MCP Server — Sieveon Memory Stack
 
-The MCP Server exposes the entire Sieveon Memory Stack via the [Model Context Protocol (MCP)](https://modelcontextprotocol.io) — 15 memory tools and 3 MCP resources. Any MCP-compatible client (e.g. Claude Desktop, Cursor, VS Code with MCP extension) can call them directly, without hosting the stack itself.
+The MCP Server exposes the entire Sieveon Memory Stack via the [Model Context Protocol (MCP)](https://modelcontextprotocol.io) — 17 memory tools and 3 MCP resources. Any MCP-compatible client (e.g. Claude Desktop, Cursor, VS Code with MCP extension) can call them directly, without hosting the stack itself.
 
 ## Architecture Overview
 
@@ -151,7 +151,7 @@ In `.cursor/mcp.json` or via the VS Code MCP extension:
 }
 ```
 
-## The 16 Tools (4 Layers) + MCP Resources
+## The 17 Tools (4 Layers) + MCP Resources
 
 ### Layer 1 — Core Memory Operations
 
@@ -251,6 +251,66 @@ Stores multiple events in batch. Each item goes through the Entropy Gate indepen
   "stored": 2,
   "failed": 0,
   "gate_summary": {"extract": 1, "ignore": 0, "skip": 1}
+}
+```
+
+---
+
+#### `memory_store_markdown`
+
+Stores markdown content (inline string or file path) by splitting it into overlapping chunks. Each chunk passes through the Entropy Gate independently, exactly like `memory_store`.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `content` | `string` | no* | — | Inline markdown string |
+| `file_path` | `string` | no* | — | Path to a `.md` file on disk |
+| `source` | `string` | no | `"markdown_import"` | Source label for all chunks |
+| `chunk_size` | `int` | no | `1500` | Target chunk size in characters (or tokens when `chunking_method="token"`) |
+| `overlap` | `int` | no | `300` | Overlap between consecutive chunks |
+| `include_heading_context` | `bool` | no | `true` | Prepend heading tree to each chunk |
+| `chunking_method` | `string` | no | `"char"` | `"char"` or `"token"` (tiktoken `cl100k_base`) |
+| `encoding_name` | `string` | no | `"cl100k_base"` | tiktoken encoding name (only used when `chunking_method="token"`) |
+| `strip_images` | `bool` | no | `true` | Replace image references with alt text |
+| `parse_front_matter` | `bool` | no | `true` | Extract YAML front matter into chunk metadata |
+| `max_concurrent` | `int` | no | `3` | Max concurrent store operations |
+| `metadata` | `object` | no | — | Optional metadata attached to every chunk |
+
+\* Exactly one of `content` or `file_path` must be provided.
+
+**Returns:**
+
+```json
+{
+  "status": "ok",
+  "source": "markdown_import",
+  "total_chunks": 5,
+  "stored": 5,
+  "failed": 0,
+  "chunk_size": 1500,
+  "overlap": 300,
+  "chunking_method": "char",
+  "max_concurrent": 3,
+  "results": [
+    {
+      "chunk_index": 0,
+      "event_id": "event:abc…",
+      "status": "stored",
+      "gate_decision": "extract",
+      "char_start": 0,
+      "char_end": 1520
+    },
+    {
+      "chunk_index": 1,
+      "event_id": "event:def…",
+      "status": "stored",
+      "gate_decision": "skip",
+      "gate_reason": "near_duplicate",
+      "char_start": 1220,
+      "char_end": 2740
+    }
+  ],
+  "errors": [],
+  "gate_summary": {"extract": 4, "ignore": 0, "skip": 1}
 }
 ```
 
@@ -773,6 +833,7 @@ read_resource("sieveon://entity/entity:alice")
 |------|-------|-------|--------|
 | `memory_store` | Core | `content`, `source?`, `metadata?` | `event_id`, `status`, `gate` |
 | `memory_store_batch` | Core | `items`, `source?` | `results[]`, `errors[]`, `stored`, `failed` |
+| `memory_store_markdown` | Core | `content` or `file_path`, `source?`, `chunk_size?`, `overlap?`, `include_heading_context?`, `chunking_method?`, `encoding_name?`, `strip_images?`, `parse_front_matter?`, `max_concurrent?`, `metadata?` | `status`, `source`, `total_chunks`, `stored`, `failed`, `results[]`, `errors[]`, `gate_summary` |
 | `memory_query` | Core | `query`, `cost_budget?`, `limit?` | `classified_as`, `strategy`, `results` |
 | `memory_update` | Core | `subject`, `predicate`, `new_value` | `invalidated_fact`, `new_fact` |
 | `event_log_search` | Primitives | `query`, `since?`, `until?`, `limit?`, `offset?`, `include_forgotten?` | `events[]`, `count` |
@@ -913,7 +974,7 @@ The HNSW index `event_embedding_vec` is defined on the `embedding` field with `D
 
 | File | Purpose |
 |------|---------|
-| `src/mcp/server.py` | MCP server implementation (15 tools, 3 resources) |
+| `src/mcp/server.py` | MCP server implementation (17 tools, 3 resources) |
 | `docs/schema.surql` | SurrealDB schema (Event Log, KG, indexes) |
 | `docs/helper_functions.surql` | DB-side functions |
 | `docs/test_data.surql` | Sample test data |

@@ -79,7 +79,7 @@ class EntropyGateConfig:
         ramp_events: int = 150,  # Events needed to reach max_threshold
         min_length: int = 10,  # Unter X Zeichen immer skippen
         min_diversity: float = 0.15,  # Anteil unique chars; repetitive Texte darunter skippen
-        max_length: int = 1000,  # Über X Zeichen immer skippen
+        max_length: int = 2000,  # Über X Zeichen immer skippen
         min_novelty: float = 0.20,  # Mindest-Novelty (1 - avg_sim); darunter = near-dup flag
         base_min_novelty: float = 0.05,  # Novelty-Schwelle bei kaltem Start
         max_entities_for_cooccurrence: int = 6,  # Obergrenze gegen kombinatorische Explosion

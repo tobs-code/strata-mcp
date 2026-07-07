@@ -19,7 +19,7 @@ Sieveon is an agent memory system that intelligently classifies, routes, plans, 
 ```
                   ┌─────────────────────────┐
                   │  MCP Server             │  (Python, stdio)
-                  │  16 tools + 3 resources │
+                  │  17 tools + 3 resources │
                   └──────┬──────────────────┘
                          │
                          ▼
@@ -33,19 +33,20 @@ Sieveon is an agent memory system that intelligently classifies, routes, plans, 
 
 | Component | Path | Description |
 |-----------|------|-------------|
-| **MCP Server** | `src/mcp/server.py` | Control plane (Anthropic MCP protocol) — stdio mode. 16 tools + 3 MCP resources: `memory_store`, `memory_store_batch`, `memory_query`, `memory_update`, `memory_forget`, `memory_unforget`, `memory_consolidate`, `memory_merge_entities`, `event_log_search`, `kg_query`, `graph_traverse`, `semantic_search`, `list_entities`, `list_events`, `memory_stats`, `explain_routing`; Resources: `sieveon://stats`, `sieveon://entity/{id}`, `sieveon://event/{id}` |
+| **MCP Server** | `src/mcp/server.py` | Control plane (Anthropic MCP protocol) — stdio mode. 17 tools + 3 MCP resources: `memory_store`, `memory_store_batch`, `memory_store_markdown`, `memory_query`, `memory_update`, `memory_forget`, `memory_unforget`, `memory_consolidate`, `memory_merge_entities`, `event_log_search`, `kg_query`, `graph_traverse`, `semantic_search`, `list_entities`, `list_events`, `memory_stats`, `explain_routing`; Resources: `sieveon://stats`, `sieveon://entity/{id}`, `sieveon://event/{id}` |
 | **Extraction** | `src/extraction/` | Entropy-gated entity extraction with Groq API (llama-3.1-8b-instant) or spaCy fallback. Pipe-separated LLM prompt, type preservation |
 | **Classifier** | `src/extraction/classifier.py` | Hybrid ML+Regex query classifier: sklearn LogisticRegression on Qwen3-Embedding-0.6B embeddings (1024d), with regex fallback. Synthetic training data generator at `scripts/generate_synthetic_training_data.py`, manual labeling CLI at `scripts/label_queries.py` |
 | **Migrations** | `src/mcp/migrations.py` | Versioned auto-migration engine for breaking schema changes |
 | **Router** | `src/router/` | Policy engine & cost tracking |
 | **Planner** | `src/planner/` | Execution engine |
 | **Maintenance** | `src/maintenance/` | Conservative maintainer |
+| **Chunking** | `src/mcp/chunking.py` | Overlapping char/token chunking engine with YAML front matter parsing, table/HTML fence protection, image stripping (alt-text preserved), heading context prepended to each chunk |
 
 ---
 
 ## Key Features
 
-- **Query Classification** — 5 types: Temporal, Factual, Multi-Hop, Conversational, Update. Hybrid approach: sklearn LogisticRegression on Qwen3-Embedding-0.6B embeddings (1024d) **+ TF-IDF (500 unigrams+bigrams)** with regex fallback when ML confidence < 0.6. Trained on synthetic (500), TREC (1000 capped), and CoQA (800) data.
+- **Query Classification** — 5 types: Temporal, Factual, Multi-Hop, Conversational, Update. Hybrid approach: sklearn LogisticRegression on Qwen3-Embedding-0.6B embeddings (1024d) **+ TF-IDF (500 unigrams+bigrams)** with regex fallback when ML confidence < 0.6. Trained on synthetic (500), TREC (2000 capped), and CoQA (800) data.
   - **5-fold CV F1-macro** (primary metric, n=900, 200/class before split): **0.967 ± 0.010**
   - Clean holdout F1-macro (excl. ~9% synthetic template collisions): **~0.96**
   - Full holdout F1-macro (n=180, incl. ~9% leakage): 0.995 — but 5-fold CV is the reliable number
@@ -200,7 +201,7 @@ composite = alpha * normalized_text_entropy + gamma * compression_ratio + beta *
 
 **Diversity guardrails (pre-filter):** Short texts (≤150 chars) are checked for `character_diversity < 0.15`; longer texts use `word_diversity < 0.20`. This blocks noise ("aaaa...", "test test...") while allowing normal English text of any length to pass through to the composite score.
 
-**Length guardrails:** texts shorter than `min_length = 10` or longer than `max_length = 1000` characters are always skipped.
+**Length guardrails:** texts shorter than `min_length = 10` or longer than `max_length = 2000` characters are always skipped.
 
 **Storage contract:** Every input is still written to the immutable Raw Event Log. The gate only controls whether the content is additionally extracted into the temporal Knowledge Graph.
 
