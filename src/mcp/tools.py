@@ -316,7 +316,7 @@ async def memory_stats(random_string: str = "") -> dict:
 
     event_task = asyncio.create_task(_q(f"SELECT count() FROM event WHERE {f} GROUP ALL;"))
     entity_task = asyncio.create_task(_q(f"SELECT count() FROM entity WHERE {f} GROUP ALL;"))
-    fact_task = asyncio.create_task(_q("SELECT count() FROM fact WHERE (valid_until IS NONE OR valid_until = NONE) AND forgotten = false GROUP ALL;"))
+    fact_task = asyncio.create_task(_q("SELECT count() FROM fact WHERE (valid_until IS NONE OR valid_until = NONE) GROUP ALL;"))
     oldest_task = asyncio.create_task(_q(f"SELECT timestamp FROM event WHERE {f} ORDER BY timestamp ASC LIMIT 1;"))
     newest_task = asyncio.create_task(_q(f"SELECT timestamp FROM event WHERE {f} ORDER BY timestamp DESC LIMIT 1;"))
     total_gate_task = asyncio.create_task(_q("SELECT count() FROM gate_log GROUP ALL;"))

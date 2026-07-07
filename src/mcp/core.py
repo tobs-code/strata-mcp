@@ -47,7 +47,7 @@ async def get_stats_resource() -> str:
 
         task1 = asyncio.create_task(_q(f"SELECT count() FROM event WHERE {f} GROUP ALL;"))
         task2 = asyncio.create_task(_q(f"SELECT count() FROM entity WHERE {f} GROUP ALL;"))
-        task3 = asyncio.create_task(_q("SELECT count() FROM fact WHERE (valid_until IS NONE OR valid_until = NONE) AND forgotten = false GROUP ALL;"))
+        task3 = asyncio.create_task(_q("SELECT count() FROM fact WHERE (valid_until IS NONE OR valid_until = NONE) GROUP ALL;"))
         task4 = asyncio.create_task(_q(f"SELECT timestamp FROM event WHERE {f} ORDER BY timestamp ASC LIMIT 1;"))
         task5 = asyncio.create_task(_q(f"SELECT timestamp FROM event WHERE {f} ORDER BY timestamp DESC LIMIT 1;"))
 
