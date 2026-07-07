@@ -957,7 +957,7 @@ async def memory_get(
         sql = f"""
         SELECT id, name, type, created_at, updated_at, forgotten, forget_reason
         FROM entity
-        WHERE name = '{name_escaped}'
+        WHERE string::lowercase(name) = string::lowercase('{name_escaped}')
           AND forgotten = false
         LIMIT 1;
         """

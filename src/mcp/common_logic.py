@@ -311,6 +311,7 @@ def _synthesize_answer(query: str, entities: List[Dict], facts: List[Dict], even
     query_lower = query.lower()
     query_words = {w for w in re.findall(r'\b\w+\b', query_lower) if len(w) > 2}
 
+    fact_entity_names = set()
     for f in facts:
         in_data = f.get("in")
         out_data = f.get("out")
@@ -331,14 +332,22 @@ def _synthesize_answer(query: str, entities: List[Dict], facts: List[Dict], even
             if not (subj_words & query_words or obj_words & query_words):
                 continue
             key_facts.append(f"{subj} {pred} {obj}")
+            fact_entity_names.update([subj.lower(), obj.lower()])
 
     key_facts = key_facts[:5]
 
-    for e in entities[:5]:
+    for e in entities:
         name = e.get("name", "")
+        if not name:
+            continue
+        name_lower = name.lower()
+        name_words = {w for w in re.findall(r'\b\w+\b', name_lower) if len(w) > 2}
+        if not (name_words & query_words or name_lower in fact_entity_names):
+            continue
         etype = e.get("type", "")
-        if name:
-            key_entities.append(f"{name} ({etype})" if etype else name)
+        key_entities.append(f"{name} ({etype})" if etype else name)
+        if len(key_entities) >= 5:
+            break
 
     query_words_list = [w for w in re.findall(r'\b\w+\b', query_lower) if len(w) > 2]
     for ev in events[:5]:
