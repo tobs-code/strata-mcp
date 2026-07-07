@@ -128,6 +128,26 @@ async def memory_store_batch_endpoint(request_data: dict):
     )
 
 
+@app.post("/memory/store/markdown")
+async def memory_store_markdown_endpoint(request_data: dict):
+    """Import markdown content or file with overlapping chunking."""
+    from .tools import memory_store_markdown
+    return await memory_store_markdown(
+        content=request_data.get("content"),
+        file_path=request_data.get("file_path"),
+        source=request_data.get("source", "markdown_import"),
+        chunk_size=request_data.get("chunk_size", 1500),
+        overlap=request_data.get("overlap", 300),
+        include_heading_context=request_data.get("include_heading_context", True),
+        chunking_method=request_data.get("chunking_method", "char"),
+        encoding_name=request_data.get("encoding_name", "cl100k_base"),
+        strip_images=request_data.get("strip_images", True),
+        parse_front_matter=request_data.get("parse_front_matter", True),
+        max_concurrent=request_data.get("max_concurrent", 3),
+        metadata=request_data.get("metadata"),
+    )
+
+
 @app.post("/memory/query")
 async def memory_query_endpoint(request_data: dict):
     """Routes a natural language query through the full pipeline: classify → plan → retrieve."""

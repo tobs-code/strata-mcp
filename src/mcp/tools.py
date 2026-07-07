@@ -79,6 +79,174 @@ async def memory_store_batch(
     }
 
 
+def _read_file(file_path: str) -> str:
+    try:
+        with open(file_path, "r", encoding="utf-8") as f:
+            return f.read()
+    except FileNotFoundError:
+        raise FileNotFoundError(f"File not found: {file_path}")
+    except UnicodeDecodeError:
+        with open(file_path, "r", encoding="latin-1") as f:
+            return f.read()
+
+
+@mcp.tool()
+async def memory_store_markdown(
+    content: Optional[str] = None,
+    file_path: Optional[str] = None,
+    source: str = "markdown_import",
+    chunk_size: int = 1500,
+    overlap: int = 300,
+    include_heading_context: bool = True,
+    chunking_method: str = "char",
+    encoding_name: str = "cl100k_base",
+    strip_images: bool = True,
+    parse_front_matter: bool = True,
+    max_concurrent: int = 3,
+    metadata: Optional[Dict[str, Any]] = None,
+) -> dict:
+    """Import markdown content or file with overlapping chunking. Each chunk is stored
+    individually through the entropy gate and knowledge graph extraction pipeline.
+
+    Provide either 'content' (inline markdown string) or 'file_path' (path on disk).
+    Chunks are overlapped to preserve context across chunk boundaries.
+    Heading hierarchy is prepended to each chunk for better retrieval context.
+
+    Args:
+        content: Inline markdown content (mutually exclusive with file_path)
+        file_path: Path to a .md file on disk (mutually exclusive with content)
+        source: Source label for all chunks
+        chunk_size: Target size per chunk in characters (default 1500)
+        overlap: Overlap in characters between consecutive chunks (default 300)
+        include_heading_context: Prepend heading tree to each chunk (default True)
+        chunking_method: 'char' (default) or 'token' (uses tiktoken)
+        encoding_name: tiktoken encoding name (default cl100k_base)
+        strip_images: Replace image references with alt text (default True)
+        parse_front_matter: Extract YAML front matter into metadata (default True)
+        max_concurrent: Max concurrent store operations (default 3)
+        metadata: Optional metadata attached to every chunk
+    """
+    if not content and not file_path:
+        return {"status": "error", "message": "Provide either 'content' or 'file_path'"}
+    if content and file_path:
+        return {"status": "error", "message": "Provide either 'content' or 'file_path', not both"}
+
+    if file_path:
+        try:
+            content = _read_file(file_path)
+        except FileNotFoundError as e:
+            return {"status": "error", "message": str(e)}
+        except Exception as e:
+            return {"status": "error", "message": f"Failed to read file: {e}"}
+        if source == "markdown_import":
+            source = f"markdown:{os.path.basename(file_path)}"
+
+    if not content or not content.strip():
+        return {"status": "error", "message": "Content is empty"}
+
+    from .chunking import chunk_markdown
+
+    chunker_result = chunk_markdown(
+        content,
+        chunk_size=chunk_size,
+        overlap=overlap,
+        include_heading_context=include_heading_context,
+        chunking_method=chunking_method,
+        encoding_name=encoding_name,
+        strip_images=strip_images,
+        parse_front_matter=parse_front_matter,
+    )
+
+    chunks = chunker_result["chunks"]
+    front_matter = chunker_result["front_matter"]
+    images_extracted = chunker_result["images"]
+
+    if not chunks:
+        return {"status": "error", "message": "No chunks generated from content"}
+
+    if front_matter:
+        meta = dict(metadata or {})
+        for k, v in front_matter.items():
+            if k not in meta:
+                meta[k] = v
+        metadata = meta
+
+    sem = asyncio.Semaphore(max_concurrent)
+    results = []
+    errors = []
+    gate_counts: Dict[str, int] = {"extract": 0, "ignore": 0, "skip": 0}
+
+    async def store_one(chunk: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        async with sem:
+            try:
+                chunk_meta = dict(metadata or {})
+                chunk_meta["chunk_index"] = chunk["index"]
+                chunk_meta["chunk_total"] = chunk["total_chunks"]
+                chunk_meta["chunk_char_start"] = chunk["char_start"]
+                chunk_meta["chunk_char_end"] = chunk["char_end"]
+                if chunk["heading_context"]:
+                    chunk_meta["heading_context"] = chunk["heading_context"]
+
+                chunk_text = chunk["text"]
+                if chunk["heading_context"] and include_heading_context:
+                    chunk_text = f"[{chunk['heading_context']}]\n{chunk['text']}"
+
+                chunk_source = f"{source}#chunk{chunk['index']}"
+
+                store_result = await _store_content(chunk_text, source=chunk_source, metadata=chunk_meta)
+                store_status = store_result.get("status", "unknown")
+                gate_decision = store_result.get("gate", {}).get("decision", "unknown")
+                if gate_decision in gate_counts:
+                    gate_counts[gate_decision] += 1
+
+                if store_status == "error":
+                    err_msg = store_result.get("message", "unknown error")
+                    errors.append({"chunk_index": chunk["index"], "error": err_msg, "from": "store"})
+                    return None
+
+                return {
+                    "chunk_index": chunk["index"],
+                    "event_id": store_result.get("event_id"),
+                    "status": store_status,
+                    "gate_decision": gate_decision,
+                    "char_start": chunk["char_start"],
+                    "char_end": chunk["char_end"],
+                }
+            except Exception as e:
+                errors.append({"chunk_index": chunk["index"], "error": str(e), "from": "exception"})
+                return None
+
+    tasks = [store_one(c) for c in chunks]
+    for coro in asyncio.as_completed(tasks):
+        r = await coro
+        if r is not None:
+            results.append(r)
+
+    results.sort(key=lambda x: x["chunk_index"])
+
+    resp: Dict[str, Any] = {
+        "status": "completed" if not errors else "partial",
+        "source": source,
+        "total_chunks": len(chunks),
+        "stored": len(results),
+        "failed": len(errors),
+        "chunk_size": chunk_size,
+        "overlap": overlap,
+        "chunking_method": chunking_method,
+        "max_concurrent": max_concurrent,
+        "results": results,
+        "errors": errors,
+        "gate_summary": gate_counts,
+    }
+
+    if front_matter:
+        resp["front_matter"] = front_matter
+    if images_extracted:
+        resp["images_extracted"] = len(images_extracted)
+
+    return resp
+
+
 @mcp.tool()
 async def memory_query(query: str, cost_budget: str = "auto", limit: int = 10) -> dict:
     """Routes a natural language query through the full pipeline: classify → plan → retrieve."""

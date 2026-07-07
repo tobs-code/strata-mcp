@@ -34,6 +34,7 @@ from .common_logic import (
 
 from .tools import (
     memory_store,
+    memory_store_markdown,
     memory_query,
     memory_update,
     memory_stats,
