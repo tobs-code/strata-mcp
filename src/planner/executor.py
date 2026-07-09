@@ -472,15 +472,17 @@ class RetrievalExecutor:
                 ev["_rrf"] = 1.0 / (k + rank)
                 fused.append(ev)
         for rank, ev in enumerate(vec_events):
+            vec_score = ev.get("vec_score", 0) or 0
+            weighted = 0.5 * (1.0 / (k + len(ftx_events) + rank)) + 0.5 * vec_score
             eid = ev.get("id")
             if eid not in seen_ids:
                 seen_ids.add(eid)
-                ev["_rrf"] = 1.0 / (k + len(ftx_events) + rank)
+                ev["_rrf"] = weighted
                 fused.append(ev)
             elif eid in seen_ids:
                 for x in fused:
                     if x.get("id") == eid:
-                        x["_rrf"] = x.get("_rrf", 0) + 1.0 / (k + rank)
+                        x["_rrf"] = x.get("_rrf", 0) + weighted
                         break
         fused.sort(key=lambda x: x.get("_rrf", 0), reverse=True)
         fused_events = [x for x in fused[:10]]
